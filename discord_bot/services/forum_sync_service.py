@@ -246,7 +246,22 @@ class ForumSyncService:
             try:
                 starter_message = await thread.fetch_message(thread.id)
                 has_components = bool(starter_message.components)
-                if starter_message.content != content or not has_components:
+
+                # Detect view layout changes (e.g. new buttons added) by
+                # comparing expected custom_ids against those on the message.
+                expected_ids = {
+                    item.custom_id
+                    for item in task_view.children
+                    if hasattr(item, 'custom_id') and item.custom_id
+                }
+                actual_ids = set()
+                for row in starter_message.components:
+                    for child in row.children:
+                        if hasattr(child, 'custom_id') and child.custom_id:
+                            actual_ids.add(child.custom_id)
+                view_changed = expected_ids != actual_ids
+
+                if starter_message.content != content or not has_components or view_changed:
                     await starter_message.edit(content=content, view=task_view)
                     # Log external change if the task carries a changed_by label
                     if task.changed_by and starter_message.content != content:
@@ -292,6 +307,56 @@ class ForumSyncService:
                     self.task_to_thread.pop(mapped_uuid, None)
                     self.thread_to_task.pop(str(thread_id_int), None)
                     mappings_changed = True
+
+        # Orphan cleanup: remove threads for tasks that were deleted externally
+        # (e.g. via the web app). These tasks no longer appear in the DB at all,
+        # so the main loop above never touches their threads.
+        task_uuids_in_db = set(uuid_to_task.keys())
+        for mapped_uuid, mapped_thread_id in list(self.task_to_thread.items()):
+            if mapped_uuid in task_uuids_in_db:
+                continue
+            # This mapped task no longer exists in the DB — clean up its thread.
+            orphan_thread = live_threads.get(int(mapped_thread_id))
+            if not orphan_thread:
+                try:
+                    orphan_thread = await self._bot.fetch_channel(int(mapped_thread_id))
+                except Exception:
+                    orphan_thread = None
+
+            removed = False
+            if isinstance(orphan_thread, discord.Thread):
+                try:
+                    await orphan_thread.delete()
+                    logger.info(
+                        f"Orphan cleanup: deleted thread {mapped_thread_id} "
+                        f"for externally-removed task '{mapped_uuid}'")
+                    removed = True
+                except discord.Forbidden:
+                    try:
+                        await orphan_thread.edit(archived=True, locked=True)
+                        logger.info(
+                            f"Orphan cleanup: archived thread {mapped_thread_id} "
+                            f"for externally-removed task '{mapped_uuid}'")
+                        removed = True
+                    except Exception as archive_err:
+                        logger.warning(
+                            f"Orphan cleanup: could not delete/archive thread "
+                            f"{mapped_thread_id}: {archive_err}")
+                except Exception as e:
+                    logger.warning(
+                        f"Orphan cleanup: failed to delete thread "
+                        f"{mapped_thread_id}: {e}")
+            else:
+                # Thread already gone — just clean up the stale mapping.
+                removed = True
+                logger.debug(
+                    f"Orphan cleanup: thread {mapped_thread_id} for task "
+                    f"'{mapped_uuid}' no longer exists; removing stale mapping.")
+
+            if removed:
+                self.task_to_thread.pop(mapped_uuid, None)
+                self.thread_to_task.pop(str(mapped_thread_id), None)
+                mappings_changed = True
 
         # Persist mapping changes once at the end to avoid redundant writes.
         if mappings_changed:
