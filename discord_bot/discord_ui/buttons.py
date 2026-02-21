@@ -310,6 +310,90 @@ class SubtaskActionView(discord.ui.View):
             )
 
 
+class DeleteTaskButton(discord.ui.Button):
+    """Button that prompts for confirmation then deletes the task."""
+
+    def __init__(self, task_uuid: str):
+        super().__init__(
+            label="🗑️ Delete Task",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"tm:delete_task:{task_uuid}",
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        from services.task_service import TaskService
+        from services.logging_service import get_logging_service
+
+        task_service = TaskService()
+        task = await task_service.get_task_by_uuid(self.view.task_uuid)
+        if not task:
+            await interaction.response.send_message(
+                "❌ Task not found.",
+                ephemeral=True,
+                delete_after=Settings.EPHEMERAL_DELETE_AFTER,
+            )
+            return
+
+        confirm_view = ConfirmationButtons(timeout=45, requester_id=interaction.user.id)
+        await interaction.response.send_message(
+            f"⚠️ Are you sure you want to delete task **{task.name}**? This cannot be undone.",
+            view=confirm_view,
+            ephemeral=True,
+        )
+
+        timed_out = await confirm_view.wait()
+        if timed_out or confirm_view.value is None:
+            await interaction.edit_original_response(
+                content="⌛ Delete request timed out.", view=None
+            )
+            return
+
+        if not confirm_view.value:
+            await interaction.edit_original_response(
+                content="❎ Delete cancelled.", view=None
+            )
+            return
+
+        task_name = task.name
+        try:
+            await task_service.delete_task_by_uuid(self.view.task_uuid)
+
+            # Trigger forum and dashboard sync
+            from config.settings import Settings as _Settings
+            from database.firebase_manager import DatabaseManager
+            from services.forum_sync_service import ForumSyncService
+            from services.dashboard_service import DashboardService
+
+            if _Settings.TASK_FORUM_CHANNEL:
+                db_manager = DatabaseManager(use_firebase=not _Settings.USE_LOCAL_STORAGE)
+                forum_service = ForumSyncService()
+                forum_service.set_bot(interaction.client)
+                forum_service.set_database(db_manager)
+                await forum_service.sync_from_database()
+
+                dashboard_service = DashboardService()
+                dashboard_service.set_bot(interaction.client)
+                dashboard_service.set_database(db_manager)
+                await dashboard_service.update_dashboard()
+
+            # Audit log
+            await get_logging_service().log_task_deleted(
+                actor=interaction.user,
+                task_name=task_name,
+            )
+
+            await interaction.edit_original_response(
+                content=f"✅ Task **{task_name}** has been deleted.",
+                view=None,
+            )
+        except Exception as e:
+            await interaction.edit_original_response(
+                content=f"❌ Error deleting task: {str(e)}",
+                view=None,
+            )
+
+
 class TaskView(discord.ui.View):
     """Persistent task-management view attached to a forum thread's starter message.
 
@@ -322,6 +406,7 @@ class TaskView(discord.ui.View):
         self.task_uuid = task_uuid
         self.add_item(ConfigureTaskButton(task_uuid))
         self.add_item(AddSubtaskButton(task_uuid))
+        self.add_item(DeleteTaskButton(task_uuid))
         if subtasks:
             self.add_item(SubtaskSelect(task_uuid, subtasks))
 

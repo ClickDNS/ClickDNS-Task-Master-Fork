@@ -253,6 +253,20 @@ class LoggingService:
         embed.add_field(name="New Status", value=status, inline=True)
         await self._send_log(embed)
 
+    async def log_task_deleted(
+        self,
+        actor: Union[discord.User, discord.Member],
+        task_name: str,
+    ):
+        """Log a task deletion."""
+        embed = self._make_embed(
+            f"🗑️ Task Deleted: **{task_name}**",
+            _LOG_COLORS["delete"],
+            actor,
+        )
+        embed.add_field(name="By", value=actor.mention, inline=False)
+        await self._send_log(embed)
+
     async def log_subtask_deleted(
         self,
         actor: Union[discord.User, discord.Member],
