@@ -95,6 +95,15 @@ class TaskService:
         self.db.delete_task(self.username, task.id)
         logger.info(f"Deleted task '{task_name}' for user {self.username}")
 
+    async def delete_task_by_uuid(self, task_uuid: str):
+        """Delete a task by stable UUID"""
+        task = await self.get_task_by_uuid(task_uuid)
+        if not task:
+            raise ValueError(f"Task with UUID '{task_uuid}' not found")
+
+        self.db.delete_task(self.username, task.id)
+        logger.info(f"Deleted task '{task.name}' for user {self.username}")
+
     async def update_task_name_by_uuid(self, task_uuid: str, new_name: str):
         """Update task name by stable UUID"""
         tasks = self.db.load_tasks(self.username)
