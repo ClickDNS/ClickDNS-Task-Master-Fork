@@ -263,13 +263,6 @@ class ForumSyncService:
 
                 if starter_message.content != content or not has_components or view_changed:
                     await starter_message.edit(content=content, view=task_view)
-                    # Log external change if the task carries a changed_by label
-                    if task.changed_by and starter_message.content != content:
-                        from services.logging_service import get_logging_service
-                        await get_logging_service().log_task_updated_externally(
-                            source=task.changed_by,
-                            task_name=task.name,
-                        )
             except Exception:
                 # Fallback: post one sync snapshot if starter message isn't accessible
                 await thread.send(content, view=task_view)
@@ -361,6 +354,81 @@ class ForumSyncService:
         # Persist mapping changes once at the end to avoid redundant writes.
         if mappings_changed:
             self._save_mappings()
+
+    async def drain_log_events(self, username: str):
+        """Drain pending log events from the database and dispatch to logging service."""
+        if not self._db:
+            return
+        try:
+            events = self._db.get_pending_log_events(username)
+            if not events:
+                return
+
+            from services.logging_service import get_logging_service
+            log_svc = get_logging_service()
+
+            for event in events:
+                try:
+                    etype = event.get("event_type", "")
+                    source = event.get("source", "External")
+                    task_name = event.get("task_name", "Unknown")
+
+                    if etype == "task_created":
+                        await log_svc.log_task_created_externally(
+                            source=source,
+                            task_name=task_name,
+                            task_after=event.get("after", {}),
+                        )
+                    elif etype == "task_updated":
+                        await log_svc.log_task_updated_externally(
+                            source=source,
+                            task_name=task_name,
+                            before=event.get("before", {}),
+                            after=event.get("after", {}),
+                        )
+                    elif etype == "task_deleted":
+                        await log_svc.log_task_deleted_externally(
+                            source=source,
+                            task_name=task_name,
+                        )
+                    elif etype == "subtask_added":
+                        await log_svc.log_subtask_added_externally(
+                            source=source,
+                            task_name=task_name,
+                            subtask=event.get("subtask", {}),
+                        )
+                    elif etype == "subtask_edited":
+                        await log_svc.log_subtask_edited_externally(
+                            source=source,
+                            task_name=task_name,
+                            subtask_id=event.get("subtask_id", 0),
+                            before=event.get("before", {}),
+                            after=event.get("after", {}),
+                        )
+                    elif etype == "subtask_toggled":
+                        await log_svc.log_subtask_toggled_externally(
+                            source=source,
+                            task_name=task_name,
+                            subtask_id=event.get("subtask_id", 0),
+                            subtask_name=event.get("subtask", {}).get("name", "Unknown"),
+                            completed=event.get("subtask", {}).get("completed", False),
+                        )
+                    elif etype == "subtask_deleted":
+                        await log_svc.log_subtask_deleted_externally(
+                            source=source,
+                            task_name=task_name,
+                            subtask_id=event.get("subtask_id", 0),
+                            subtask_name=event.get("subtask", {}).get("name", "Unknown"),
+                        )
+                    else:
+                        logger.warning(f"Unknown log event type: {etype}")
+                except Exception as exc:
+                    logger.warning(f"Failed to process log event {event.get('id', '?')}: {exc}")
+
+            self._db.clear_pending_log_events(username)
+            logger.debug(f"Drained {len(events)} pending log event(s) for user {username}")
+        except Exception as e:
+            logger.warning(f"Error draining log events: {e}")
 
     async def handle_thread_rename(self, thread: discord.Thread):
         """Sync thread title changes back to database task name"""

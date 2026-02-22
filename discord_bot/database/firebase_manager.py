@@ -307,6 +307,57 @@ class DatabaseManager:
                 logger.error(f"Failed to save bot metadata file: {e}")
                 raise
 
+    def get_pending_log_events(self, username: str) -> list:
+        """Read and return the pending log events queue for a user."""
+        if self.use_firebase:
+            try:
+                events_ref = db.reference(f"users/{username}/_pending_log_events")
+                data = events_ref.get()
+                if isinstance(data, list):
+                    return data
+                if isinstance(data, dict):
+                    # Firebase may convert lists to dicts with numeric keys
+                    return [v for v in data.values() if v is not None]
+                return []
+            except Exception as e:
+                logger.error(f"Failed to load pending log events from Firebase: {e}")
+                return []
+        else:
+            local_file = self._get_local_file_path(username)
+            if os.path.isfile(local_file):
+                try:
+                    with open(local_file, "r", encoding="utf-8") as f:
+                        all_data = json.load(f)
+                    events = all_data.get("_pending_log_events", [])
+                    return events if isinstance(events, list) else []
+                except Exception as e:
+                    logger.error(f"Failed to read pending log events from local file: {e}")
+                    return []
+            return []
+
+    def clear_pending_log_events(self, username: str):
+        """Delete/empty the pending log events queue for a user."""
+        if self.use_firebase:
+            try:
+                events_ref = db.reference(f"users/{username}/_pending_log_events")
+                events_ref.delete()
+                logger.debug(f"Cleared pending log events for user {username}")
+            except Exception as e:
+                logger.error(f"Failed to clear pending log events from Firebase: {e}")
+        else:
+            local_file = self._get_local_file_path(username)
+            if os.path.isfile(local_file):
+                try:
+                    with open(local_file, "r", encoding="utf-8") as f:
+                        all_data = json.load(f)
+                    if "_pending_log_events" in all_data:
+                        del all_data["_pending_log_events"]
+                        with open(local_file, "w", encoding="utf-8") as f:
+                            json.dump(all_data, f, indent=2)
+                        logger.debug(f"Cleared pending log events locally for user {username}")
+                except Exception as e:
+                    logger.error(f"Failed to clear pending log events from local file: {e}")
+
     def get_task_thread_mappings(self) -> Dict[str, Dict[str, str]]:
         """Get task<->thread mappings for forum sync"""
         data = self.get_bot_metadata("task_forum_mappings") or {}
