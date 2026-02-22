@@ -5,10 +5,14 @@ Sends structured embeds to a configurable LOG_CHANNEL whenever a user
 performs an action through the bot (task configure, subtask add/edit/
 toggle/delete, task rename).
 """
+import json
 import logging
+import os
 import discord
 from datetime import datetime, timezone
 from typing import Optional, Union
+from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +20,10 @@ logger = logging.getLogger(__name__)
 _MAX_DESCRIPTION_PREVIEW = 512
 # Discord hard limit for embed field values.
 _MAX_FIELD_VALUE = 1024
+# Threshold above which we push to koda-paste instead of inline.
+_PASTE_THRESHOLD = 500
+# koda-paste server URL (Tailscale-only).
+_PASTE_URL = os.environ.get("KODA_PASTE_URL", "http://100.123.59.91:8844")
 
 
 def _trunc(value: str, limit: int = _MAX_FIELD_VALUE) -> str:
@@ -23,6 +31,44 @@ def _trunc(value: str, limit: int = _MAX_FIELD_VALUE) -> str:
     if not value:
         return value
     return value if len(value) <= limit else value[: limit - 1] + "…"
+
+
+def _upload_to_paste(content: str, title: str = "Paste") -> Optional[str]:
+    """Upload content to koda-paste and return the URL, or None on failure."""
+    try:
+        payload = json.dumps({"content": content, "title": title}).encode()
+        req = Request(
+            f"{_PASTE_URL}/api/paste",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(req, timeout=5) as resp:
+            result = json.loads(resp.read().decode())
+            return result.get("url")
+    except (URLError, OSError, json.JSONDecodeError, KeyError) as e:
+        logger.warning(f"Failed to upload to koda-paste: {e}")
+        return None
+
+
+def _format_diff_value(old_val: str, new_val: str, field_name: str = "Field", task_name: str = "") -> str:
+    """Format a before/after diff. If the combined text exceeds _PASTE_THRESHOLD,
+    upload the full diff to koda-paste and return a link; otherwise return inline text."""
+    inline = f"**Before:** {old_val}\n**After:** {new_val}"
+    if len(inline) <= _PASTE_THRESHOLD:
+        return inline
+
+    # Upload full diff to koda-paste
+    paste_content = f"Task: {task_name}\nField: {field_name}\n\n--- Before ---\n{old_val}\n\n--- After ---\n{new_val}"
+    paste_url = _upload_to_paste(paste_content, title=f"{task_name} — {field_name} diff")
+    if paste_url:
+        # Show a short preview + link
+        preview_old = old_val[:80] + "…" if len(old_val) > 80 else old_val
+        preview_new = new_val[:80] + "…" if len(new_val) > 80 else new_val
+        return f"**Before:** {preview_old}\n**After:** {preview_new}\n🔗 [Full diff]({paste_url})"
+    else:
+        # Fallback: truncate if paste upload fails
+        return _trunc(inline)
 
 _LOG_COLORS = {
     "create": discord.Color.green(),
@@ -140,7 +186,7 @@ class LoggingService:
         for label, old_val, new_val in changes:
             embed.add_field(
                 name=label,
-                value=_trunc(f"**Before:** {old_val}\n**After:** {new_val}"),
+                value=_format_diff_value(old_val, new_val, label, task_name),
                 inline=True,
             )
         await self._send_log(embed)
@@ -240,7 +286,7 @@ class LoggingService:
         for label, old_val, new_val in changes:
             embed.add_field(
                 name=label,
-                value=_trunc(f"**Before:** {old_val}\n**After:** {new_val}"),
+                value=_format_diff_value(old_val, new_val, label, task_name),
                 inline=True,
             )
         await self._send_log(embed)
@@ -315,7 +361,7 @@ class LoggingService:
         for label, old_val, new_val in changes:
             embed.add_field(
                 name=label,
-                value=_trunc(f"**Before:** {old_val}\n**After:** {new_val}"),
+                value=_format_diff_value(old_val, new_val, label, task_name),
                 inline=True,
             )
         await self._send_log(embed)
@@ -416,7 +462,7 @@ class LoggingService:
         for label, old_val, new_val in changes:
             embed.add_field(
                 name=label,
-                value=_trunc(f"**Before:** {old_val}\n**After:** {new_val}"),
+                value=_format_diff_value(old_val, new_val, label, task_name),
                 inline=True,
             )
         await self._send_log(embed)
