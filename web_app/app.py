@@ -730,6 +730,216 @@ def remove_task(task_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/tasks/<task_id>/subtasks', methods=['POST'])
+@login_required
+def add_subtask(task_id):
+    """API endpoint to add a new subtask to a task"""
+    username = session.get('username')
+    try:
+        data = request.get_json() or {}
+        name = (data.get('name') or '').strip()
+        if not name:
+            return jsonify({'success': False, 'error': 'Subtask name is required'}), 400
+
+        tasks = load_tasks(username)
+
+        # Find the task
+        target_task = None
+        for task in tasks:
+            if task['id'] == task_id:
+                target_task = task
+                break
+        if target_task is None:
+            return jsonify({'success': False, 'error': f'Task not found: {task_id}'}), 404
+
+        # Assign a new unique subtask id (max existing id + 1)
+        existing_subtasks = normalize_subtasks(target_task.get('subtasks', []))
+        next_id = max((st['id'] for st in existing_subtasks), default=0) + 1
+
+        new_subtask = {
+            'id': next_id,
+            'name': name,
+            'description': (data.get('description') or '').strip(),
+            'url': (data.get('url') or '').strip(),
+            'completed': False,
+        }
+
+        existing_subtasks.append(new_subtask)
+        target_task['subtasks'] = normalize_subtasks(existing_subtasks)
+
+        save_tasks(username, tasks)
+
+        append_log_event(username, {
+            "event_type": "subtask_added",
+            "task_name": target_task.get('name', task_id),
+            "task_uuid": target_task.get('uuid', ''),
+            "subtask_id": next_id,
+            "subtask": new_subtask,
+        })
+
+        return jsonify({'success': True, 'subtask': new_subtask})
+    except Exception as e:
+        logger.error(f"Error adding subtask to task {task_id}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/tasks/<task_id>/subtasks/<int:subtask_id>', methods=['PUT'])
+@login_required
+def edit_subtask(task_id, subtask_id):
+    """API endpoint to edit a subtask (name, description, url)"""
+    username = session.get('username')
+    try:
+        data = request.get_json() or {}
+        tasks = load_tasks(username)
+
+        # Find the task
+        target_task = None
+        for task in tasks:
+            if task['id'] == task_id:
+                target_task = task
+                break
+        if target_task is None:
+            return jsonify({'success': False, 'error': f'Task not found: {task_id}'}), 404
+
+        # Find the subtask
+        subtasks = normalize_subtasks(target_task.get('subtasks', []))
+        target_subtask = None
+        for st in subtasks:
+            if st['id'] == subtask_id:
+                target_subtask = st
+                break
+        if target_subtask is None:
+            return jsonify({'success': False, 'error': f'Subtask not found: {subtask_id}'}), 404
+
+        # Capture before state for logging (only edited fields)
+        edit_before = {}
+        edit_after = {}
+
+        # Only update provided fields
+        for field in ('name', 'description', 'url'):
+            if field in data:
+                new_val = (data[field] or '').strip()
+                old_val = target_subtask.get(field, '')
+                if old_val != new_val:
+                    edit_before[field] = old_val
+                    edit_after[field] = new_val
+                target_subtask[field] = new_val
+
+        target_task['subtasks'] = normalize_subtasks(subtasks)
+        save_tasks(username, tasks)
+
+        if edit_before:
+            append_log_event(username, {
+                "event_type": "subtask_edited",
+                "task_name": target_task.get('name', task_id),
+                "task_uuid": target_task.get('uuid', ''),
+                "subtask_id": subtask_id,
+                "before": edit_before,
+                "after": edit_after,
+            })
+
+        return jsonify({'success': True, 'subtask': target_subtask})
+    except Exception as e:
+        logger.error(f"Error editing subtask {subtask_id} of task {task_id}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/tasks/<task_id>/subtasks/<int:subtask_id>', methods=['DELETE'])
+@login_required
+def delete_subtask(task_id, subtask_id):
+    """API endpoint to delete a subtask"""
+    username = session.get('username')
+    try:
+        tasks = load_tasks(username)
+
+        # Find the task
+        target_task = None
+        for task in tasks:
+            if task['id'] == task_id:
+                target_task = task
+                break
+        if target_task is None:
+            return jsonify({'success': False, 'error': f'Task not found: {task_id}'}), 404
+
+        # Find the subtask
+        subtasks = normalize_subtasks(target_task.get('subtasks', []))
+        deleted_subtask = None
+        remaining = []
+        for st in subtasks:
+            if st['id'] == subtask_id:
+                deleted_subtask = st
+            else:
+                remaining.append(st)
+
+        if deleted_subtask is None:
+            return jsonify({'success': False, 'error': f'Subtask not found: {subtask_id}'}), 404
+
+        target_task['subtasks'] = normalize_subtasks(remaining)
+        save_tasks(username, tasks)
+
+        append_log_event(username, {
+            "event_type": "subtask_deleted",
+            "task_name": target_task.get('name', task_id),
+            "task_uuid": target_task.get('uuid', ''),
+            "subtask_id": subtask_id,
+            "subtask": deleted_subtask,
+        })
+
+        return jsonify({'success': True, 'subtask': deleted_subtask})
+    except Exception as e:
+        logger.error(f"Error deleting subtask {subtask_id} of task {task_id}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/tasks/<task_id>/subtasks/<int:subtask_id>/toggle', methods=['PATCH'])
+@login_required
+def toggle_subtask(task_id, subtask_id):
+    """API endpoint to toggle a subtask's completed status"""
+    username = session.get('username')
+    try:
+        tasks = load_tasks(username)
+
+        # Find the task
+        target_task = None
+        for task in tasks:
+            if task['id'] == task_id:
+                target_task = task
+                break
+        if target_task is None:
+            return jsonify({'success': False, 'error': f'Task not found: {task_id}'}), 404
+
+        # Find the subtask
+        subtasks = normalize_subtasks(target_task.get('subtasks', []))
+        target_subtask = None
+        for st in subtasks:
+            if st['id'] == subtask_id:
+                target_subtask = st
+                break
+        if target_subtask is None:
+            return jsonify({'success': False, 'error': f'Subtask not found: {subtask_id}'}), 404
+
+        # Toggle
+        target_subtask['completed'] = not target_subtask.get('completed', False)
+        target_task['subtasks'] = normalize_subtasks(subtasks)
+        save_tasks(username, tasks)
+
+        append_log_event(username, {
+            "event_type": "subtask_toggled",
+            "task_name": target_task.get('name', task_id),
+            "task_uuid": target_task.get('uuid', ''),
+            "subtask_id": subtask_id,
+            "subtask": {
+                "name": target_subtask.get('name', ''),
+                "completed": target_subtask.get('completed', False),
+            },
+        })
+
+        return jsonify({'success': True, 'subtask': target_subtask})
+    except Exception as e:
+        logger.error(f"Error toggling subtask {subtask_id} of task {task_id}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/tasks/reorder', methods=['POST'])
 @login_required
 def reorder_tasks():
