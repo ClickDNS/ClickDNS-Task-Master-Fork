@@ -10,6 +10,7 @@ import os
 import json
 import socket
 import uuid
+from datetime import datetime, timezone
 from functools import wraps
 from typing import Any
 from dotenv import load_dotenv
@@ -348,7 +349,6 @@ def save_tasks(username, tasks):
             'owner': task.get('owner', ''),
             'colour': task.get('colour', 'default'),
             'subtasks': normalize_subtasks(task.get('subtasks', [])),
-            'changed_by': 'Web App',
         }
 
     if USE_FIREBASE:
@@ -369,6 +369,47 @@ def save_tasks(username, tasks):
         except Exception as e:
             logger.error(f"Failed to save local tasks file: {e}")
             raise
+
+
+def append_log_event(username, event):
+    """Append a structured log event to the pending event queue.
+
+    Works for both Firebase and local JSON storage paths.
+    """
+    event.setdefault("id", str(uuid.uuid4()))
+    event.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+    event.setdefault("source", "Web App")
+
+    if USE_FIREBASE:
+        try:
+            events_ref = db.reference(f"users/{username}/_pending_log_events")
+            existing = events_ref.get()
+            if isinstance(existing, list):
+                existing.append(event)
+            elif isinstance(existing, dict):
+                existing = [v for v in existing.values() if v is not None]
+                existing.append(event)
+            else:
+                existing = [event]
+            events_ref.set(existing)
+        except Exception as e:
+            logger.error(f"Failed to append log event to Firebase: {e}")
+    else:
+        local_file = get_local_file_path(username)
+        try:
+            all_data = {}
+            if os.path.isfile(local_file):
+                with open(local_file, "r", encoding="utf-8") as f:
+                    all_data = json.load(f) or {}
+            events = all_data.get("_pending_log_events", [])
+            if not isinstance(events, list):
+                events = []
+            events.append(event)
+            all_data["_pending_log_events"] = events
+            with open(local_file, "w", encoding="utf-8") as f:
+                json.dump(all_data, f, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to append log event locally: {e}")
 
 
 def delete_task(username, task_id):
@@ -494,6 +535,21 @@ def create_task():
         tasks.append(new_task)
         save_tasks(username, tasks)
 
+        # Emit task_created log event
+        append_log_event(username, {
+            "event_type": "task_created",
+            "task_name": new_task["name"],
+            "task_uuid": new_task["uuid"],
+            "after": {
+                "status": new_task.get("status", "To Do"),
+                "priority": new_task.get("colour", "default"),
+                "owner": new_task.get("owner", ""),
+                "deadline": new_task.get("deadline") or "",
+                "description": new_task.get("description", ""),
+                "url": new_task.get("url", ""),
+            },
+        })
+
         return jsonify({'success': True, 'task': new_task})
     except Exception as e:
         logger.error(f"Error creating task: {e}")
@@ -509,9 +565,31 @@ def update_task(task_id):
         data = request.get_json()
         tasks = load_tasks(username)
 
-        # Find and update task
+        # Find and update task, capturing before state for logging
+        task_name_for_log = task_id
+        task_uuid_for_log = ""
+        before_snapshot = {}
+        before_subtasks = []
+        after_snapshot = {}
+        after_subtasks = []
+
         for task in tasks:
             if task['id'] == task_id:
+                # Capture before state
+                task_name_for_log = task.get('name', task_id)
+                task_uuid_for_log = task.get('uuid', '')
+                before_snapshot = {
+                    "name": task.get("name", ""),
+                    "status": task.get("status", "To Do"),
+                    "priority": task.get("colour", "default"),
+                    "owner": task.get("owner", ""),
+                    "deadline": task.get("deadline") or "",
+                    "description": task.get("description", ""),
+                    "url": task.get("url", ""),
+                }
+                before_subtasks = normalize_subtasks(task.get('subtasks', []))
+
+                # Apply updates
                 task.update({
                     'name': data.get('name', task['name']),
                     'uuid': task.get('uuid', str(uuid.uuid4())),
@@ -523,9 +601,98 @@ def update_task(task_id):
                     'colour': data.get('colour', task.get('colour', 'default')),
                     'subtasks': normalize_subtasks(data.get('subtasks', task.get('subtasks', []))),
                 })
+
+                # Capture after state
+                after_snapshot = {
+                    "name": task.get("name", ""),
+                    "status": task.get("status", "To Do"),
+                    "priority": task.get("colour", "default"),
+                    "owner": task.get("owner", ""),
+                    "deadline": task.get("deadline") or "",
+                    "description": task.get("description", ""),
+                    "url": task.get("url", ""),
+                }
+                after_subtasks = normalize_subtasks(task.get('subtasks', []))
                 break
 
         save_tasks(username, tasks)
+
+        # Emit task_updated event if any tracked fields changed
+        changed_before = {}
+        changed_after = {}
+        for key in before_snapshot:
+            if before_snapshot.get(key) != after_snapshot.get(key):
+                changed_before[key] = before_snapshot[key]
+                changed_after[key] = after_snapshot[key]
+        if changed_before:
+            append_log_event(username, {
+                "event_type": "task_updated",
+                "task_name": task_name_for_log,
+                "task_uuid": task_uuid_for_log,
+                "before": changed_before,
+                "after": changed_after,
+            })
+
+        # Emit subtask-level events by diffing before/after subtask lists
+        before_st_map = {st['id']: st for st in before_subtasks}
+        after_st_map = {st['id']: st for st in after_subtasks}
+
+        # Detect added subtasks
+        for st_id, st in after_st_map.items():
+            if st_id not in before_st_map:
+                append_log_event(username, {
+                    "event_type": "subtask_added",
+                    "task_name": task_name_for_log,
+                    "task_uuid": task_uuid_for_log,
+                    "subtask_id": st_id,
+                    "subtask": st,
+                })
+
+        # Detect deleted subtasks
+        for st_id, st in before_st_map.items():
+            if st_id not in after_st_map:
+                append_log_event(username, {
+                    "event_type": "subtask_deleted",
+                    "task_name": task_name_for_log,
+                    "task_uuid": task_uuid_for_log,
+                    "subtask_id": st_id,
+                    "subtask": st,
+                })
+
+        # Detect edited/toggled subtasks
+        for st_id in before_st_map:
+            if st_id not in after_st_map:
+                continue
+            old_st = before_st_map[st_id]
+            new_st = after_st_map[st_id]
+
+            # Check for completion toggle
+            if old_st.get('completed', False) != new_st.get('completed', False):
+                append_log_event(username, {
+                    "event_type": "subtask_toggled",
+                    "task_name": task_name_for_log,
+                    "task_uuid": task_uuid_for_log,
+                    "subtask_id": st_id,
+                    "subtask": {"name": new_st.get("name", ""), "completed": new_st.get("completed", False)},
+                })
+
+            # Check for field edits (name, description, url)
+            edit_before = {}
+            edit_after = {}
+            for field in ("name", "description", "url"):
+                if old_st.get(field, "") != new_st.get(field, ""):
+                    edit_before[field] = old_st.get(field, "")
+                    edit_after[field] = new_st.get(field, "")
+            if edit_before:
+                append_log_event(username, {
+                    "event_type": "subtask_edited",
+                    "task_name": task_name_for_log,
+                    "task_uuid": task_uuid_for_log,
+                    "subtask_id": st_id,
+                    "before": edit_before,
+                    "after": edit_after,
+                })
+
         return jsonify({'success': True})
     except Exception as e:
         logger.error(f"Error updating task: {e}")
@@ -538,7 +705,25 @@ def remove_task(task_id):
     """API endpoint to delete a task"""
     username = session.get('username')
     try:
+        # Capture task name before deletion for logging
+        tasks_before = load_tasks(username)
+        deleted_task_name = task_id
+        deleted_task_uuid = ""
+        for t in tasks_before:
+            if t['id'] == task_id:
+                deleted_task_name = t.get('name', task_id)
+                deleted_task_uuid = t.get('uuid', '')
+                break
+
         delete_task(username, task_id)
+
+        # Emit task_deleted log event
+        append_log_event(username, {
+            "event_type": "task_deleted",
+            "task_name": deleted_task_name,
+            "task_uuid": deleted_task_uuid,
+        })
+
         return jsonify({'success': True})
     except Exception as e:
         logger.error(f"Error deleting task: {e}")
