@@ -147,6 +147,7 @@ async def forum_sync_updater():
         return
     try:
         await forum_sync_service.sync_from_database()
+        await forum_sync_service.drain_log_events(Settings.TASKMASTER_USERNAME)
         await dashboard_service.update_dashboard()
     except Exception as e:
         logger.error(f"Error syncing forum/dashboard: {e}")

@@ -151,22 +151,201 @@ class LoggingService:
             embed.add_field(name="By", value=actor.mention, inline=False)
         await self._send_log(embed)
 
+    # ------------------------------------------------------------------
+    # External-source logging (events from Web App / Desktop App / etc.)
+    # ------------------------------------------------------------------
+
+    def _make_external_embed(
+        self,
+        title: str,
+        color: discord.Color,
+        source: str,
+    ) -> discord.Embed:
+        """Create an embed for an externally-triggered event."""
+        embed = discord.Embed(
+            title=title,
+            color=color,
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.set_footer(text=f"via {source}")
+        return embed
+
+    async def log_task_created_externally(
+        self,
+        source: str,
+        task_name: str,
+        task_after: dict,
+    ):
+        """Log a task created outside Discord."""
+        embed = self._make_external_embed(
+            f"✅ Task Created: **{task_name}**",
+            _LOG_COLORS["create"],
+            source,
+        )
+        embed.add_field(name="By", value=source, inline=False)
+        if task_after.get("owner"):
+            embed.add_field(name="Owner", value=task_after["owner"], inline=True)
+        if task_after.get("deadline"):
+            embed.add_field(name="Deadline", value=task_after["deadline"], inline=True)
+        if task_after.get("description"):
+            embed.add_field(
+                name="Description",
+                value=task_after["description"][:_MAX_DESCRIPTION_PREVIEW],
+                inline=False,
+            )
+        if task_after.get("url"):
+            embed.add_field(name="URL", value=task_after["url"], inline=False)
+        await self._send_log(embed)
+
     async def log_task_updated_externally(
         self,
         source: str,
         task_name: str,
+        before: dict,
+        after: dict,
     ):
-        """Log a task update made outside Discord (e.g. via the Web App).
+        """Log task field changes from an external source with before/after diff."""
+        field_labels = {
+            "status": "Status",
+            "priority": "Priority",
+            "owner": "Owner",
+            "deadline": "Deadline",
+            "description": "Description",
+            "url": "URL",
+            "name": "Name",
+        }
+        changes = [
+            (label, before.get(key) or "*empty*", after.get(key) or "*empty*")
+            for key, label in field_labels.items()
+            if before.get(key) != after.get(key)
+        ]
+        if not changes:
+            return
 
-        *source* is a plain-text label such as "Web App" or "Desktop App".
-        """
-        embed = discord.Embed(
-            title=f"⚙️ Task Updated: **{task_name}**",
-            color=_LOG_COLORS["update"],
-            timestamp=datetime.now(timezone.utc),
+        embed = self._make_external_embed(
+            f"⚙️ Task Configured: **{task_name}**",
+            _LOG_COLORS["update"],
+            source,
         )
-        embed.set_footer(text=f"Changed via {source}")
         embed.add_field(name="By", value=source, inline=False)
+        for label, old_val, new_val in changes:
+            embed.add_field(
+                name=label,
+                value=f"**Before:** {old_val}\n**After:** {new_val}",
+                inline=True,
+            )
+        await self._send_log(embed)
+
+    async def log_task_deleted_externally(
+        self,
+        source: str,
+        task_name: str,
+    ):
+        """Log a task deletion from an external source."""
+        embed = self._make_external_embed(
+            f"🗑️ Task Deleted: **{task_name}**",
+            _LOG_COLORS["delete"],
+            source,
+        )
+        embed.add_field(name="By", value=source, inline=False)
+        await self._send_log(embed)
+
+    async def log_subtask_added_externally(
+        self,
+        source: str,
+        task_name: str,
+        subtask: dict,
+    ):
+        """Log a subtask added from an external source."""
+        embed = self._make_external_embed(
+            f"➕ Sub-task Added to **{task_name}**",
+            _LOG_COLORS["create"],
+            source,
+        )
+        embed.add_field(name="By", value=source, inline=False)
+        embed.add_field(
+            name="Sub-task", value=subtask.get("name", "Unnamed"), inline=True)
+        if subtask.get("description"):
+            embed.add_field(
+                name="Description",
+                value=subtask["description"][:_MAX_DESCRIPTION_PREVIEW],
+                inline=False,
+            )
+        if subtask.get("url"):
+            embed.add_field(name="URL", value=subtask["url"], inline=False)
+        await self._send_log(embed)
+
+    async def log_subtask_edited_externally(
+        self,
+        source: str,
+        task_name: str,
+        subtask_id: int,
+        before: dict,
+        after: dict,
+    ):
+        """Log subtask field edits from an external source with before/after diff."""
+        field_labels = {
+            "name": "Name",
+            "description": "Description",
+            "url": "URL",
+        }
+        changes = [
+            (label, before.get(key) or "*empty*", after.get(key) or "*empty*")
+            for key, label in field_labels.items()
+            if before.get(key) != after.get(key)
+        ]
+        if not changes:
+            return
+
+        embed = self._make_external_embed(
+            f"✏️ Sub-task #{subtask_id} Edited on **{task_name}**",
+            _LOG_COLORS["update"],
+            source,
+        )
+        embed.add_field(name="By", value=source, inline=False)
+        for label, old_val, new_val in changes:
+            embed.add_field(
+                name=label,
+                value=f"**Before:** {old_val}\n**After:** {new_val}",
+                inline=True,
+            )
+        await self._send_log(embed)
+
+    async def log_subtask_toggled_externally(
+        self,
+        source: str,
+        task_name: str,
+        subtask_id: int,
+        subtask_name: str,
+        completed: bool,
+    ):
+        """Log a subtask completion toggle from an external source."""
+        status = "✅ Complete" if completed else "☐ Incomplete"
+        embed = self._make_external_embed(
+            f"🔄 Sub-task #{subtask_id} Toggled on **{task_name}**",
+            _LOG_COLORS["toggle"],
+            source,
+        )
+        embed.add_field(name="By", value=source, inline=False)
+        embed.add_field(name="Sub-task", value=subtask_name, inline=True)
+        embed.add_field(name="New Status", value=status, inline=True)
+        await self._send_log(embed)
+
+    async def log_subtask_deleted_externally(
+        self,
+        source: str,
+        task_name: str,
+        subtask_id: int,
+        subtask_name: str,
+    ):
+        """Log a subtask deletion from an external source."""
+        embed = self._make_external_embed(
+            f"🗑️ Sub-task #{subtask_id} Deleted from **{task_name}**",
+            _LOG_COLORS["delete"],
+            source,
+        )
+        embed.add_field(name="By", value=source, inline=False)
+        embed.add_field(name="Sub-task", value=subtask_name, inline=False)
         await self._send_log(embed)
 
     async def log_subtask_added(
