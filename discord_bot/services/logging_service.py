@@ -14,6 +14,15 @@ logger = logging.getLogger(__name__)
 
 # Maximum characters shown for description fields in log embeds.
 _MAX_DESCRIPTION_PREVIEW = 512
+# Discord hard limit for embed field values.
+_MAX_FIELD_VALUE = 1024
+
+
+def _trunc(value: str, limit: int = _MAX_FIELD_VALUE) -> str:
+    """Truncate a string to fit within Discord's embed field value limit."""
+    if not value:
+        return value
+    return value if len(value) <= limit else value[: limit - 1] + "…"
 
 _LOG_COLORS = {
     "create": discord.Color.green(),
@@ -90,7 +99,7 @@ class LoggingService:
                 inline=False,
             )
         if task.get("url"):
-            embed.add_field(name="URL", value=task["url"], inline=False)
+            embed.add_field(name="URL", value=_trunc(task["url"]), inline=False)
         await self._send_log(embed)
 
     async def log_task_configured(
@@ -131,7 +140,7 @@ class LoggingService:
         for label, old_val, new_val in changes:
             embed.add_field(
                 name=label,
-                value=f"**Before:** {old_val}\n**After:** {new_val}",
+                value=_trunc(f"**Before:** {old_val}\n**After:** {new_val}"),
                 inline=True,
             )
         await self._send_log(embed)
@@ -145,8 +154,8 @@ class LoggingService:
         """Log a task rename (e.g. from a thread title edit)."""
         embed = self._make_embed(
             "✏️ Task Renamed", _LOG_COLORS["rename"], actor)
-        embed.add_field(name="Before", value=old_name, inline=True)
-        embed.add_field(name="After", value=new_name, inline=True)
+        embed.add_field(name="Before", value=_trunc(old_name), inline=True)
+        embed.add_field(name="After", value=_trunc(new_name), inline=True)
         if actor:
             embed.add_field(name="By", value=actor.mention, inline=False)
         await self._send_log(embed)
@@ -194,7 +203,7 @@ class LoggingService:
                 inline=False,
             )
         if task_after.get("url"):
-            embed.add_field(name="URL", value=task_after["url"], inline=False)
+            embed.add_field(name="URL", value=_trunc(task_after["url"]), inline=False)
         await self._send_log(embed)
 
     async def log_task_updated_externally(
@@ -231,7 +240,7 @@ class LoggingService:
         for label, old_val, new_val in changes:
             embed.add_field(
                 name=label,
-                value=f"**Before:** {old_val}\n**After:** {new_val}",
+                value=_trunc(f"**Before:** {old_val}\n**After:** {new_val}"),
                 inline=True,
             )
         await self._send_log(embed)
@@ -264,7 +273,7 @@ class LoggingService:
         )
         embed.add_field(name="By", value=source, inline=False)
         embed.add_field(
-            name="Sub-task", value=subtask.get("name", "Unnamed"), inline=True)
+            name="Sub-task", value=_trunc(subtask.get("name", "Unnamed")), inline=True)
         if subtask.get("description"):
             embed.add_field(
                 name="Description",
@@ -272,7 +281,7 @@ class LoggingService:
                 inline=False,
             )
         if subtask.get("url"):
-            embed.add_field(name="URL", value=subtask["url"], inline=False)
+            embed.add_field(name="URL", value=_trunc(subtask["url"]), inline=False)
         await self._send_log(embed)
 
     async def log_subtask_edited_externally(
@@ -306,7 +315,7 @@ class LoggingService:
         for label, old_val, new_val in changes:
             embed.add_field(
                 name=label,
-                value=f"**Before:** {old_val}\n**After:** {new_val}",
+                value=_trunc(f"**Before:** {old_val}\n**After:** {new_val}"),
                 inline=True,
             )
         await self._send_log(embed)
@@ -327,7 +336,7 @@ class LoggingService:
             source,
         )
         embed.add_field(name="By", value=source, inline=False)
-        embed.add_field(name="Sub-task", value=subtask_name, inline=True)
+        embed.add_field(name="Sub-task", value=_trunc(subtask_name), inline=True)
         embed.add_field(name="New Status", value=status, inline=True)
         await self._send_log(embed)
 
@@ -345,7 +354,7 @@ class LoggingService:
             source,
         )
         embed.add_field(name="By", value=source, inline=False)
-        embed.add_field(name="Sub-task", value=subtask_name, inline=False)
+        embed.add_field(name="Sub-task", value=_trunc(subtask_name), inline=False)
         await self._send_log(embed)
 
     async def log_subtask_added(
@@ -362,7 +371,7 @@ class LoggingService:
         )
         embed.add_field(name="By", value=actor.mention, inline=False)
         embed.add_field(
-            name="Sub-task", value=subtask.get("name", "Unnamed"), inline=True)
+            name="Sub-task", value=_trunc(subtask.get("name", "Unnamed")), inline=True)
         if subtask.get("description"):
             embed.add_field(
                 name="Description",
@@ -370,7 +379,7 @@ class LoggingService:
                 inline=False,
             )
         if subtask.get("url"):
-            embed.add_field(name="URL", value=subtask["url"], inline=False)
+            embed.add_field(name="URL", value=_trunc(subtask["url"]), inline=False)
         await self._send_log(embed)
 
     async def log_subtask_edited(
@@ -407,7 +416,7 @@ class LoggingService:
         for label, old_val, new_val in changes:
             embed.add_field(
                 name=label,
-                value=f"**Before:** {old_val}\n**After:** {new_val}",
+                value=_trunc(f"**Before:** {old_val}\n**After:** {new_val}"),
                 inline=True,
             )
         await self._send_log(embed)
@@ -428,7 +437,7 @@ class LoggingService:
             actor,
         )
         embed.add_field(name="By", value=actor.mention, inline=False)
-        embed.add_field(name="Sub-task", value=subtask_name, inline=True)
+        embed.add_field(name="Sub-task", value=_trunc(subtask_name), inline=True)
         embed.add_field(name="New Status", value=status, inline=True)
         await self._send_log(embed)
 
@@ -460,7 +469,7 @@ class LoggingService:
             actor,
         )
         embed.add_field(name="By", value=actor.mention, inline=False)
-        embed.add_field(name="Sub-task", value=subtask_name, inline=False)
+        embed.add_field(name="Sub-task", value=_trunc(subtask_name), inline=False)
         await self._send_log(embed)
 
 
