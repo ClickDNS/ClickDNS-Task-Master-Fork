@@ -93,10 +93,80 @@ function getNextSubtaskId(subtasks) {
     return (ids.length ? Math.max(...ids) : 0) + 1;
 }
 
+// ─── Auto-Refresh ─────────────────────────────────────────────────────────────
+const AutoRefresh = (() => {
+    const INTERVAL_MS = 15_000;
+    let timer = null;
+
+    /** True when we should skip a refresh tick to avoid disrupting the user. */
+    function shouldSkip() {
+        if (editingTaskId !== null) return true;           // edit form is active
+        if (document.querySelector('.modal.show')) return true; // any modal is open
+        if (DragManager.isActive()) return true;           // drag-and-drop in flight
+        return false;
+    }
+
+    async function tick() {
+        if (document.hidden || shouldSkip()) return;
+
+        try {
+            const response = await fetch('/api/tasks');
+            if (!response.ok) return;
+            const data = await response.json();
+            if (!data.success) return;
+
+            const freshTasks = data.tasks.map(task => ({
+                ...task,
+                subtasks: normalizeSubtaskList(task.subtasks || [])
+            }));
+
+            // Normalise order before comparing so API ordering changes
+            // don't trigger a needless re-render.
+            const key = t => String(t.id);
+            const sortedFresh   = [...freshTasks].sort((a, b) => key(a).localeCompare(key(b)));
+            const sortedCurrent = [...tasks].sort((a, b) => key(a).localeCompare(key(b)));
+
+            if (JSON.stringify(sortedFresh) !== JSON.stringify(sortedCurrent)) {
+                tasks = freshTasks;
+                renderTasks();
+            }
+        } catch (_) {
+            // Network hiccup — silently skip; will retry on next tick.
+        }
+    }
+
+    function start() {
+        if (timer) return;
+        timer = setInterval(tick, INTERVAL_MS);
+    }
+
+    function stop() {
+        clearInterval(timer);
+        timer = null;
+    }
+
+    function init() {
+        start();
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                stop();
+            } else {
+                // Tab became active — refresh immediately then resume the interval.
+                tick();
+                start();
+            }
+        });
+    }
+
+    return { init };
+})();
+
 // Initialize
 document.addEventListener('DOMContentLoaded', function () {
     loadTasks();
     setupEventListeners();
+    AutoRefresh.init();
 });
 
 // Event Listeners
