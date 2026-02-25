@@ -160,9 +160,21 @@ class ForumSyncService:
             if thread_id:
                 thread = live_threads.get(int(thread_id))
                 if not isinstance(thread, discord.Thread):
-                    # Fall back to a direct API fetch for uncached threads.
+                    # Fall back to a direct API fetch for uncached/archived threads.
                     try:
                         thread = await self._bot.fetch_channel(int(thread_id))
+                        # Discord auto-archives inactive forum threads. Un-archive now so
+                        # that fetch_message + edit work without hitting permission errors,
+                        # and so the thread reappears in the active forum view.
+                        if isinstance(thread, discord.Thread) and thread.archived:
+                            try:
+                                await thread.edit(archived=False)
+                                logger.info(
+                                    f"Un-archived thread {thread_id} for task '{task.name}'")
+                            except Exception as unarchive_err:
+                                logger.warning(
+                                    f"Could not un-archive thread {thread_id} for task "
+                                    f"'{task.name}': {unarchive_err}")
                     except Exception as e:
                         logger.warning(
                             f"Could not fetch thread {thread_id} for task '{task.name}': {e}")
@@ -263,9 +275,19 @@ class ForumSyncService:
 
                 if starter_message.content != content or not has_components or view_changed:
                     await starter_message.edit(content=content, view=task_view)
-            except Exception:
-                # Fallback: post one sync snapshot if starter message isn't accessible
+            except discord.NotFound:
+                # Starter message was deleted externally — post a replacement.
+                logger.warning(
+                    f"Starter message for task '{task.name}' (thread {thread.id}) not found; "
+                    "posting replacement.")
                 await thread.send(content, view=task_view)
+            except Exception as e:
+                # Any other error (permissions, rate limit, archived state, etc.) —
+                # log it but do NOT send a new message. Sending blindly here is what
+                # causes duplicate posts when fetch_message fails transiently.
+                logger.warning(
+                    f"Could not update starter message for task '{task.name}' "
+                    f"(thread {thread.id}): {e}")
 
         # Reverse-scan: delete any live forum threads whose mapped task is now Complete
         # (catches threads that slipped through the main loop due to missing/stale mappings).
