@@ -87,7 +87,19 @@ class ForumSyncService:
                 if subtask.get('url'):
                     lines.append(f"   🔗 {subtask.get('url')}")
 
-        return "\n".join(lines)
+        content = "\n".join(lines)
+        if len(content) > 2000:
+            # Truncate description to fit within Discord's 2000-char limit
+            excess = len(content) - 1997
+            desc = task.description or '*No description*'
+            if len(desc) > excess:
+                truncated_desc = desc[:len(desc) - excess - 1] + "…"
+                lines[5] = f"**Description:** {truncated_desc}"
+                content = "\n".join(lines)
+            # Hard cap as final safety net
+            if len(content) > 2000:
+                content = content[:1997] + "…"
+        return content
 
     def _get_thread_name(self, task):
         """Generate forum thread name with priority emoji prefix for search filtering."""
