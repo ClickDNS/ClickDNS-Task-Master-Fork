@@ -8,9 +8,12 @@ toggle/delete, task rename).
 import json
 import logging
 import os
+import socket
+import time
 import discord
 from datetime import datetime, timezone
 from typing import Optional, Union
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
@@ -23,7 +26,11 @@ _MAX_FIELD_VALUE = 1024
 # Threshold above which we push to koda-paste instead of inline.
 _PASTE_THRESHOLD = 500
 # koda-paste server URL (Tailscale-only).
-_PASTE_URL = os.environ.get("KODA_PASTE_URL", "https://koda-vps.tail9ac53b.ts.net:8844")
+_PASTE_URL = os.environ.get(
+    "KODA_PASTE_URL", "https://koda-vps.tail9ac53b.ts.net:8844")
+_PASTE_RETRY_AFTER = 0.0
+_PASTE_DNS_BACKOFF_SECONDS = 300
+_PASTE_FAILURE_BACKOFF_SECONDS = 120
 
 
 def _trunc(value: str, limit: int = _MAX_FIELD_VALUE) -> str:
@@ -33,8 +40,38 @@ def _trunc(value: str, limit: int = _MAX_FIELD_VALUE) -> str:
     return value if len(value) <= limit else value[: limit - 1] + "…"
 
 
+def _paste_host_resolvable(hostname: str) -> bool:
+    if not hostname:
+        return False
+    try:
+        socket.getaddrinfo(hostname, None)
+        return True
+    except socket.gaierror:
+        return False
+
+
 def _upload_to_paste(content: str, title: str = "Paste") -> Optional[str]:
     """Upload content to koda-paste and return the URL, or None on failure."""
+    global _PASTE_RETRY_AFTER
+
+    now = time.time()
+    if now < _PASTE_RETRY_AFTER:
+        return None
+
+    parsed_url = urlparse(_PASTE_URL)
+    if not parsed_url.scheme or not parsed_url.netloc:
+        logger.warning(f"Invalid KODA_PASTE_URL configured: {_PASTE_URL}")
+        _PASTE_RETRY_AFTER = now + _PASTE_FAILURE_BACKOFF_SECONDS
+        return None
+
+    if not _paste_host_resolvable(parsed_url.hostname or ""):
+        logger.warning(
+            "Failed to upload to koda-paste: "
+            f"DNS lookup failed for host '{parsed_url.hostname}'"
+        )
+        _PASTE_RETRY_AFTER = now + _PASTE_DNS_BACKOFF_SECONDS
+        return None
+
     try:
         payload = json.dumps({"content": content, "title": title}).encode()
         req = Request(
@@ -48,6 +85,7 @@ def _upload_to_paste(content: str, title: str = "Paste") -> Optional[str]:
             return result.get("url")
     except (URLError, OSError, json.JSONDecodeError, KeyError) as e:
         logger.warning(f"Failed to upload to koda-paste: {e}")
+        _PASTE_RETRY_AFTER = now + _PASTE_FAILURE_BACKOFF_SECONDS
         return None
 
 
@@ -60,7 +98,8 @@ def _format_diff_value(old_val: str, new_val: str, field_name: str = "Field", ta
 
     # Upload full diff to koda-paste
     paste_content = f"Task: {task_name}\nField: {field_name}\n\n--- Before ---\n{old_val}\n\n--- After ---\n{new_val}"
-    paste_url = _upload_to_paste(paste_content, title=f"{task_name} — {field_name} diff")
+    paste_url = _upload_to_paste(
+        paste_content, title=f"{task_name} — {field_name} diff")
     if paste_url:
         # Show a short preview + link
         preview_old = old_val[:80] + "…" if len(old_val) > 80 else old_val
@@ -69,6 +108,7 @@ def _format_diff_value(old_val: str, new_val: str, field_name: str = "Field", ta
     else:
         # Fallback: truncate if paste upload fails
         return _trunc(inline)
+
 
 _LOG_COLORS = {
     "create": discord.Color.green(),
@@ -84,9 +124,35 @@ class LoggingService:
 
     def __init__(self):
         self._bot = None
+        self._paste_health_logged = False
 
     def set_bot(self, bot):
         self._bot = bot
+        self._log_paste_health_once()
+
+    def _log_paste_health_once(self):
+        if self._paste_health_logged:
+            return
+        self._paste_health_logged = True
+
+        parsed_url = urlparse(_PASTE_URL)
+        if not parsed_url.scheme or not parsed_url.netloc:
+            logger.warning(
+                f"KODA_PASTE_URL is invalid at startup: {_PASTE_URL}")
+            return
+
+        host = parsed_url.hostname or ""
+        port = parsed_url.port
+        if _paste_host_resolvable(host):
+            target = f"{host}:{port}" if port else host
+            logger.info(f"koda-paste startup health check OK: {target}")
+            return
+
+        target = f"{host}:{port}" if port else host
+        logger.warning(
+            "koda-paste startup health check failed: "
+            f"DNS lookup failed for '{target}'"
+        )
 
     async def _send_log(self, embed: discord.Embed):
         from config.settings import Settings
@@ -137,7 +203,8 @@ class LoggingService:
         if task.get("owner"):
             embed.add_field(name="Owner", value=task["owner"], inline=True)
         if task.get("deadline"):
-            embed.add_field(name="Deadline", value=task["deadline"], inline=True)
+            embed.add_field(name="Deadline",
+                            value=task["deadline"], inline=True)
         if task.get("description"):
             embed.add_field(
                 name="Description",
@@ -145,7 +212,8 @@ class LoggingService:
                 inline=False,
             )
         if task.get("url"):
-            embed.add_field(name="URL", value=_trunc(task["url"]), inline=False)
+            embed.add_field(name="URL", value=_trunc(
+                task["url"]), inline=False)
         await self._send_log(embed)
 
     async def log_task_configured(
@@ -239,9 +307,11 @@ class LoggingService:
         )
         embed.add_field(name="By", value=source, inline=False)
         if task_after.get("owner"):
-            embed.add_field(name="Owner", value=task_after["owner"], inline=True)
+            embed.add_field(
+                name="Owner", value=task_after["owner"], inline=True)
         if task_after.get("deadline"):
-            embed.add_field(name="Deadline", value=task_after["deadline"], inline=True)
+            embed.add_field(name="Deadline",
+                            value=task_after["deadline"], inline=True)
         if task_after.get("description"):
             embed.add_field(
                 name="Description",
@@ -249,7 +319,8 @@ class LoggingService:
                 inline=False,
             )
         if task_after.get("url"):
-            embed.add_field(name="URL", value=_trunc(task_after["url"]), inline=False)
+            embed.add_field(name="URL", value=_trunc(
+                task_after["url"]), inline=False)
         await self._send_log(embed)
 
     async def log_task_updated_externally(
@@ -327,7 +398,8 @@ class LoggingService:
                 inline=False,
             )
         if subtask.get("url"):
-            embed.add_field(name="URL", value=_trunc(subtask["url"]), inline=False)
+            embed.add_field(name="URL", value=_trunc(
+                subtask["url"]), inline=False)
         await self._send_log(embed)
 
     async def log_subtask_edited_externally(
@@ -382,7 +454,8 @@ class LoggingService:
             source,
         )
         embed.add_field(name="By", value=source, inline=False)
-        embed.add_field(name="Sub-task", value=_trunc(subtask_name), inline=True)
+        embed.add_field(name="Sub-task",
+                        value=_trunc(subtask_name), inline=True)
         embed.add_field(name="New Status", value=status, inline=True)
         await self._send_log(embed)
 
@@ -400,7 +473,8 @@ class LoggingService:
             source,
         )
         embed.add_field(name="By", value=source, inline=False)
-        embed.add_field(name="Sub-task", value=_trunc(subtask_name), inline=False)
+        embed.add_field(name="Sub-task",
+                        value=_trunc(subtask_name), inline=False)
         await self._send_log(embed)
 
     async def log_subtask_added(
@@ -425,7 +499,8 @@ class LoggingService:
                 inline=False,
             )
         if subtask.get("url"):
-            embed.add_field(name="URL", value=_trunc(subtask["url"]), inline=False)
+            embed.add_field(name="URL", value=_trunc(
+                subtask["url"]), inline=False)
         await self._send_log(embed)
 
     async def log_subtask_edited(
@@ -483,7 +558,8 @@ class LoggingService:
             actor,
         )
         embed.add_field(name="By", value=actor.mention, inline=False)
-        embed.add_field(name="Sub-task", value=_trunc(subtask_name), inline=True)
+        embed.add_field(name="Sub-task",
+                        value=_trunc(subtask_name), inline=True)
         embed.add_field(name="New Status", value=status, inline=True)
         await self._send_log(embed)
 
@@ -515,7 +591,8 @@ class LoggingService:
             actor,
         )
         embed.add_field(name="By", value=actor.mention, inline=False)
-        embed.add_field(name="Sub-task", value=_trunc(subtask_name), inline=False)
+        embed.add_field(name="Sub-task",
+                        value=_trunc(subtask_name), inline=False)
         await self._send_log(embed)
 
 

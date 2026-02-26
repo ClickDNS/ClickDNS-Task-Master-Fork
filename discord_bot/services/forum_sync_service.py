@@ -7,6 +7,8 @@ from config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
+_DISCORD_CONTENT_LIMIT = 2000
+
 
 class ForumSyncService:
     """Synchronize DB tasks to forum threads and back"""
@@ -94,6 +96,15 @@ class ForumSyncService:
     def _task_sort_key(self, task):
         """Sort key for forum sync ordering without priority/status weighting."""
         return (task.order, task.name.lower())
+
+    def _safe_discord_content(self, content: str, task_name: str) -> str:
+        if len(content) <= _DISCORD_CONTENT_LIMIT:
+            return content
+        logger.warning(
+            f"Task content exceeded Discord limit for '{task_name}' "
+            f"({len(content)} chars); truncating to {_DISCORD_CONTENT_LIMIT}."
+        )
+        return content[: _DISCORD_CONTENT_LIMIT - 1] + "…"
 
     async def sync_from_database(self):
         if not self._bot or Settings.TASK_FORUM_CHANNEL is None:
@@ -229,9 +240,13 @@ class ForumSyncService:
 
             if not isinstance(thread, discord.Thread):
                 thread_name = self._get_thread_name(task)
+                thread_content = self._safe_discord_content(
+                    self._task_content(task),
+                    task.name,
+                )
                 created = await forum_channel.create_thread(
                     name=thread_name,
-                    content=self._task_content(task),
+                    content=thread_content,
                     view=task_view,
                 )
                 thread = created.thread
@@ -254,7 +269,10 @@ class ForumSyncService:
                         f"Failed to update thread metadata for {thread.id}: {e}")
 
             # Keep latest task snapshot in thread starter message where possible
-            content = self._task_content(task)
+            content = self._safe_discord_content(
+                self._task_content(task),
+                task.name,
+            )
             try:
                 starter_message = await thread.fetch_message(thread.id)
                 has_components = bool(starter_message.components)
@@ -432,23 +450,28 @@ class ForumSyncService:
                             source=source,
                             task_name=task_name,
                             subtask_id=event.get("subtask_id", 0),
-                            subtask_name=event.get("subtask", {}).get("name", "Unknown"),
-                            completed=event.get("subtask", {}).get("completed", False),
+                            subtask_name=event.get(
+                                "subtask", {}).get("name", "Unknown"),
+                            completed=event.get("subtask", {}).get(
+                                "completed", False),
                         )
                     elif etype == "subtask_deleted":
                         await log_svc.log_subtask_deleted_externally(
                             source=source,
                             task_name=task_name,
                             subtask_id=event.get("subtask_id", 0),
-                            subtask_name=event.get("subtask", {}).get("name", "Unknown"),
+                            subtask_name=event.get(
+                                "subtask", {}).get("name", "Unknown"),
                         )
                     else:
                         logger.warning(f"Unknown log event type: {etype}")
                 except Exception as exc:
-                    logger.warning(f"Failed to process log event {event.get('id', '?')}: {exc}")
+                    logger.warning(
+                        f"Failed to process log event {event.get('id', '?')}: {exc}")
 
             self._db.clear_pending_log_events(username)
-            logger.debug(f"Drained {len(events)} pending log event(s) for user {username}")
+            logger.debug(
+                f"Drained {len(events)} pending log event(s) for user {username}")
         except Exception as e:
             logger.warning(f"Error draining log events: {e}")
 
