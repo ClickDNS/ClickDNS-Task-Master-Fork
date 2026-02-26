@@ -51,6 +51,25 @@ Task-Master is a desktop application built with Python and Tkinter GUI toolkit. 
 - The application logs activity to a file named `task_manager.log` in the same directory as the script.
 - Tooltips are provided for input fields to guide users on their usage.
 
+## Discord Bot Environment Variables
+
+The Discord bot is configured via environment variables. Copy `discord_bot/.env.example` to `discord_bot/.env` and fill in the values.
+
+Key variables:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DISCORD_BOT_TOKEN` | ✅ | Discord bot token |
+| `DASHBOARD_CHANNEL` | ✅ | Channel ID for read-only dashboard stats |
+| `TASK_FORUM_CHANNEL` | ✅ | Forum channel ID (one thread per task) |
+| `REMINDER_CHANNEL` | ✅ | Channel ID for deadline reminders |
+| `LOG_CHANNEL` | ❌ | Channel ID for human-readable audit logs |
+| `TASKMASTER_USERNAME` | ✅ | Firebase username for database access |
+| `OWNERS` | ✅ | Space-separated list of task assignees |
+| `KODA_PASTE_URL` | ❌ | koda-paste server URL for uploading large diffs (default: `https://koda-vps.tail9ac53b.ts.net:8844`) |
+
+See `discord_bot/.env.example` for the full list including Firebase credentials and sync intervals.
+
 ## Contributing
 
 Contributions are welcome! If you find any issues or have suggestions for improvements, please open an issue or submit a pull request.

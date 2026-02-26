@@ -23,7 +23,7 @@ _MAX_FIELD_VALUE = 1024
 # Threshold above which we push to koda-paste instead of inline.
 _PASTE_THRESHOLD = 500
 # koda-paste server URL (Tailscale-only).
-_PASTE_URL = os.environ.get("KODA_PASTE_URL", "http://100.123.59.91:8844")
+_PASTE_URL = os.environ.get("KODA_PASTE_URL", "https://koda-vps.tail9ac53b.ts.net:8844")
 
 
 def _trunc(value: str, limit: int = _MAX_FIELD_VALUE) -> str:
