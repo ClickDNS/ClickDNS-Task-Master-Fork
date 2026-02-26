@@ -5,17 +5,12 @@ Sends structured embeds to a configurable LOG_CHANNEL whenever a user
 performs an action through the bot (task configure, subtask add/edit/
 toggle/delete, task rename).
 """
-import json
 import logging
-import os
-import socket
-import time
 import discord
 from datetime import datetime, timezone
 from typing import Optional, Union
-from urllib.parse import urlparse
-from urllib.request import Request, urlopen
-from urllib.error import URLError
+
+from services.paste_service import upload_to_paste, _PASTE_URL
 
 logger = logging.getLogger(__name__)
 
@@ -25,12 +20,6 @@ _MAX_DESCRIPTION_PREVIEW = 512
 _MAX_FIELD_VALUE = 1024
 # Threshold above which we push to koda-paste instead of inline.
 _PASTE_THRESHOLD = 500
-# koda-paste server URL (Tailscale-only).
-_PASTE_URL = os.environ.get(
-    "KODA_PASTE_URL", "https://koda-vps.tail9ac53b.ts.net:8844")
-_PASTE_RETRY_AFTER = 0.0
-_PASTE_DNS_BACKOFF_SECONDS = 300
-_PASTE_FAILURE_BACKOFF_SECONDS = 120
 
 
 def _trunc(value: str, limit: int = _MAX_FIELD_VALUE) -> str:
@@ -40,53 +29,9 @@ def _trunc(value: str, limit: int = _MAX_FIELD_VALUE) -> str:
     return value if len(value) <= limit else value[: limit - 1] + "…"
 
 
-def _paste_host_resolvable(hostname: str) -> bool:
-    if not hostname:
-        return False
-    try:
-        socket.getaddrinfo(hostname, None)
-        return True
-    except socket.gaierror:
-        return False
-
-
 def _upload_to_paste(content: str, title: str = "Paste") -> Optional[str]:
-    """Upload content to koda-paste and return the URL, or None on failure."""
-    global _PASTE_RETRY_AFTER
-
-    now = time.time()
-    if now < _PASTE_RETRY_AFTER:
-        return None
-
-    parsed_url = urlparse(_PASTE_URL)
-    if not parsed_url.scheme or not parsed_url.netloc:
-        logger.warning(f"Invalid KODA_PASTE_URL configured: {_PASTE_URL}")
-        _PASTE_RETRY_AFTER = now + _PASTE_FAILURE_BACKOFF_SECONDS
-        return None
-
-    if not _paste_host_resolvable(parsed_url.hostname or ""):
-        logger.warning(
-            "Failed to upload to koda-paste: "
-            f"DNS lookup failed for host '{parsed_url.hostname}'"
-        )
-        _PASTE_RETRY_AFTER = now + _PASTE_DNS_BACKOFF_SECONDS
-        return None
-
-    try:
-        payload = json.dumps({"content": content, "title": title}).encode()
-        req = Request(
-            f"{_PASTE_URL}/api/paste",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urlopen(req, timeout=5) as resp:
-            result = json.loads(resp.read().decode())
-            return result.get("url")
-    except (URLError, OSError, json.JSONDecodeError, KeyError) as e:
-        logger.warning(f"Failed to upload to koda-paste: {e}")
-        _PASTE_RETRY_AFTER = now + _PASTE_FAILURE_BACKOFF_SECONDS
-        return None
+    """Delegate to shared paste_service."""
+    return upload_to_paste(content, title=title)
 
 
 def _format_diff_value(old_val: str, new_val: str, field_name: str = "Field", task_name: str = "") -> str:
@@ -101,12 +46,10 @@ def _format_diff_value(old_val: str, new_val: str, field_name: str = "Field", ta
     paste_url = _upload_to_paste(
         paste_content, title=f"{task_name} — {field_name} diff")
     if paste_url:
-        # Show a short preview + link
         preview_old = old_val[:80] + "…" if len(old_val) > 80 else old_val
         preview_new = new_val[:80] + "…" if len(new_val) > 80 else new_val
         return f"**Before:** {preview_old}\n**After:** {preview_new}\n🔗 [Full diff]({paste_url})"
     else:
-        # Fallback: truncate if paste upload fails
         return _trunc(inline)
 
 
@@ -124,35 +67,9 @@ class LoggingService:
 
     def __init__(self):
         self._bot = None
-        self._paste_health_logged = False
 
     def set_bot(self, bot):
         self._bot = bot
-        self._log_paste_health_once()
-
-    def _log_paste_health_once(self):
-        if self._paste_health_logged:
-            return
-        self._paste_health_logged = True
-
-        parsed_url = urlparse(_PASTE_URL)
-        if not parsed_url.scheme or not parsed_url.netloc:
-            logger.warning(
-                f"KODA_PASTE_URL is invalid at startup: {_PASTE_URL}")
-            return
-
-        host = parsed_url.hostname or ""
-        port = parsed_url.port
-        if _paste_host_resolvable(host):
-            target = f"{host}:{port}" if port else host
-            logger.info(f"koda-paste startup health check OK: {target}")
-            return
-
-        target = f"{host}:{port}" if port else host
-        logger.warning(
-            "koda-paste startup health check failed: "
-            f"DNS lookup failed for '{target}'"
-        )
 
     async def _send_log(self, embed: discord.Embed):
         from config.settings import Settings

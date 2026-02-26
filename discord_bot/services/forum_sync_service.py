@@ -4,6 +4,7 @@ Service to sync tasks with Discord forum threads
 import logging
 import discord
 from config.settings import Settings
+from services.paste_service import is_paste_url
 
 logger = logging.getLogger(__name__)
 
@@ -60,13 +61,19 @@ class ForumSyncService:
 
     def _task_content(self, task):
         priority_emoji = self._priority_emoji(task.colour)
+        desc = task.description or '*No description*'
+        if is_paste_url(desc):
+            desc_display = f"[View full description]({desc})"
+        else:
+            desc_display = desc
+
         lines = [
             f"**Status:** {task.status}",
             f"**Priority:** {priority_emoji} {task.colour}",
             f"**Owner:** {task.owner or 'Unassigned'}",
             f"**Deadline:** {task.deadline_display or 'None'}",
             "",
-            f"**Description:** {task.description or '*No description*'}",
+            f"**Description:** {desc_display}",
         ]
         if task.url:
             lines.append(f"**URL:** {task.url}")
@@ -82,23 +89,19 @@ class ForumSyncService:
                 subtask_id = subtask.get('id', idx)
                 lines.append(
                     f"{checkbox} {subtask_id}. {subtask.get('name', 'Unnamed subtask')}")
-                if subtask.get('description'):
-                    lines.append(f"   📝 {subtask.get('description')}")
+                subtask_desc = subtask.get('description', '')
+                if subtask_desc:
+                    if is_paste_url(subtask_desc):
+                        lines.append(f"   📝 [View description]({subtask_desc})")
+                    else:
+                        lines.append(f"   📝 {subtask_desc}")
                 if subtask.get('url'):
                     lines.append(f"   🔗 {subtask.get('url')}")
 
         content = "\n".join(lines)
-        if len(content) > 2000:
-            # Truncate description to fit within Discord's 2000-char limit
-            excess = len(content) - 1997
-            desc = task.description or '*No description*'
-            if len(desc) > excess:
-                truncated_desc = desc[:len(desc) - excess - 1] + "…"
-                lines[5] = f"**Description:** {truncated_desc}"
-                content = "\n".join(lines)
-            # Hard cap as final safety net
-            if len(content) > 2000:
-                content = content[:1997] + "…"
+        # Hard safety cap — should never be hit now that long descriptions go to paste
+        if len(content) > _DISCORD_CONTENT_LIMIT:
+            content = content[:_DISCORD_CONTENT_LIMIT - 1] + "…"
         return content
 
     def _get_thread_name(self, task):
