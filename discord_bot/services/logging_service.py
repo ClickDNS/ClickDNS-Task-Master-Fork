@@ -10,7 +10,7 @@ import discord
 from datetime import datetime, timezone
 from typing import Optional, Union
 
-from services.paste_service import upload_to_paste, _PASTE_URL
+from services.paste_service import upload_to_paste
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +29,6 @@ def _trunc(value: str, limit: int = _MAX_FIELD_VALUE) -> str:
     return value if len(value) <= limit else value[: limit - 1] + "…"
 
 
-def _upload_to_paste(content: str, title: str = "Paste") -> Optional[str]:
-    """Delegate to shared paste_service."""
-    return upload_to_paste(content, title=title)
-
-
 def _format_diff_value(old_val: str, new_val: str, field_name: str = "Field", task_name: str = "") -> str:
     """Format a before/after diff. If the combined text exceeds _PASTE_THRESHOLD,
     upload the full diff to koda-paste and return a link; otherwise return inline text."""
@@ -43,8 +38,7 @@ def _format_diff_value(old_val: str, new_val: str, field_name: str = "Field", ta
 
     # Upload full diff to koda-paste
     paste_content = f"Task: {task_name}\nField: {field_name}\n\n--- Before ---\n{old_val}\n\n--- After ---\n{new_val}"
-    paste_url = _upload_to_paste(
-        paste_content, title=f"{task_name} — {field_name} diff")
+    paste_url = upload_to_paste(paste_content, title=f"{task_name} — {field_name} diff")
     if paste_url:
         preview_old = old_val[:80] + "…" if len(old_val) > 80 else old_val
         preview_new = new_val[:80] + "…" if len(new_val) > 80 else new_val

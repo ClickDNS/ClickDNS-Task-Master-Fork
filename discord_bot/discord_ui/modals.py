@@ -18,6 +18,23 @@ from services.paste_service import offload_description, is_paste_url, DESCRIPTIO
 
 logger = logging.getLogger(__name__)
 
+_PASTE_PLACEHOLDER = "(stored via koda-paste — enter new text to replace)"
+_MODAL_DESC_MAX = 900  # leave headroom below Discord's 1000-char TextInput limit
+
+
+def _modal_description_default(description: str) -> tuple[str, bool]:
+    """Return (default_text, was_paste) for a description TextInput default value.
+
+    - If already a paste URL: show placeholder, was_paste=True
+    - If too long to fit in modal: truncate with notice, was_paste=False
+    - Otherwise: return as-is, was_paste=False
+    """
+    if is_paste_url(description):
+        return _PASTE_PLACEHOLDER, True
+    if len(description) > _MODAL_DESC_MAX:
+        return description[:_MODAL_DESC_MAX] + "… [truncated — save to replace with full text]", False
+    return description, False
+
 
 async def _auto_delete(msg, delay: float):
     """Delete a message after a delay (background task)."""
@@ -247,15 +264,15 @@ class ConfigureTaskModal(ui.Modal, title="Configure Task"):
         )
         self.add_item(self.deadline)
 
+        desc_default, self._description_was_paste = _modal_description_default(current_description or "")
         self.description = ui.TextInput(
             label="Description",
-            default="(stored via koda-paste — enter new text to replace)" if is_paste_url(current_description or "") else (current_description or ""),
+            default=desc_default,
             placeholder=f"Descriptions over {DESCRIPTION_PASTE_THRESHOLD} chars are stored via koda-paste",
             required=False,
             style=discord.TextStyle.paragraph,
             max_length=1000,
         )
-        self._description_was_paste = is_paste_url(current_description or "")
         self.add_item(self.description)
 
         self.url = ui.TextInput(
@@ -314,8 +331,7 @@ class ConfigureTaskModal(ui.Modal, title="Configure Task"):
 
         # If the stored description was a paste URL and user didn't change the placeholder,
         # preserve the existing paste URL. Otherwise offload if needed.
-        placeholder_text = "(stored via koda-paste — enter new text to replace)"
-        if self._description_was_paste and description_raw.strip() == placeholder_text:
+        if self._description_was_paste and description_raw.strip() == _PASTE_PLACEHOLDER:
             description = self._current_description  # keep existing paste URL
         else:
             description = offload_description(description_raw, title=f"{self.task_name} — Description")
@@ -495,12 +511,12 @@ class ConfigureSubtaskModal(ui.Modal):
         self.add_item(self.subtask_name)
 
         existing_desc = existing_subtask.get('description', '')
-        self._subtask_desc_was_paste = is_paste_url(existing_desc)
+        desc_default, self._subtask_desc_was_paste = _modal_description_default(existing_desc)
         self._existing_subtask_desc = existing_desc
 
         self.subtask_description = ui.TextInput(
             label="Description",
-            default="(stored via koda-paste — enter new text to replace)" if self._subtask_desc_was_paste else existing_desc,
+            default=desc_default,
             placeholder=f"Descriptions over {DESCRIPTION_PASTE_THRESHOLD} chars are stored via koda-paste",
             required=False,
             style=discord.TextStyle.paragraph,
@@ -544,8 +560,7 @@ class ConfigureSubtaskModal(ui.Modal):
             return
 
         description_raw = (self.subtask_description.value or '').strip()
-        placeholder_text = "(stored via koda-paste — enter new text to replace)"
-        if self._subtask_desc_was_paste and description_raw == placeholder_text:
+        if self._subtask_desc_was_paste and description_raw == _PASTE_PLACEHOLDER:
             description = self._existing_subtask_desc  # preserve existing paste URL
         else:
             description = offload_description(description_raw, title=f"Subtask #{self.subtask_id} — Description")
