@@ -76,6 +76,35 @@ class ConfigureTaskButton(discord.ui.Button):
             )
             return
 
+        # If description exists and is long (over threshold) and is not
+        # already a paste URL, attempt to offload it to koda-paste before
+        # opening the modal so the modal can show the paste placeholder.
+        from services.paste_service import offload_description, is_paste_url, DESCRIPTION_PASTE_THRESHOLD
+
+        current_desc = task.description or ""
+        if current_desc and len(current_desc) > DESCRIPTION_PASTE_THRESHOLD and not is_paste_url(current_desc):
+            # Best-effort: try to offload now. If paste unavailable, offload_description
+            # will return the original text and we continue.
+            new_desc = offload_description(current_desc, title=f"{task.name} — Description")
+            if new_desc != current_desc:
+                # Persist updated description (paste URL) to DB so modal sees it.
+                try:
+                    await task_service.update_task_by_uuid(
+                        task_uuid=self.view.task_uuid,
+                        status=task.status,
+                        priority=task.colour,
+                        owner=task.owner,
+                        deadline=task.deadline,
+                        description=new_desc,
+                        url=task.url,
+                    )
+                    # refresh local task object
+                    task = await task_service.get_task_by_uuid(self.view.task_uuid)
+                except Exception:
+                    # Ignore persistence failure — we'll still open the modal with
+                    # the current in-memory values to avoid blocking the user.
+                    pass
+
         await interaction.response.send_modal(ConfigureTaskModal(
             task_uuid=self.view.task_uuid,
             task_name=task.name,
