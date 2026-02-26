@@ -331,7 +331,7 @@ function deleteSubtaskFromForm(index) {
     renderSubtasksList();
 }
 
-function editSubtaskInForm(index) {
+async function editSubtaskInForm(index) {
     currentSubtasks = normalizeSubtaskList(currentSubtasks);
     const subtask = currentSubtasks[index];
     if (!subtask) return;
@@ -339,11 +339,34 @@ function editSubtaskInForm(index) {
     editingSubtaskIndex = index;
     document.getElementById('subtaskModalTitle').textContent = `Edit Sub-task #${subtask.id}`;
     document.getElementById('subtaskEditName').value = subtask.name || '';
-    document.getElementById('subtaskEditDescription').value = subtask.description || '';
     document.getElementById('subtaskEditUrl').value = subtask.url || '';
     document.getElementById('subtaskEditNameError').textContent = '';
-    document.getElementById('subtaskEditModal').classList.add('show');
-    document.getElementById('subtaskEditName').focus();
+
+    // If description is a paste URL, show placeholder and resolve async
+    if (subtask.description_is_paste) {
+        const ta = document.getElementById('subtaskEditDescription');
+        ta.value = '';
+        ta.placeholder = 'Loading description…';
+        document.getElementById('subtaskEditModal').classList.add('show');
+        document.getElementById('subtaskEditName').focus();
+        // Resolve from server — we need the task context; use editingTaskId
+        if (editingTaskId) {
+            const resolved = await fetchResolvedTask(editingTaskId);
+            if (resolved) {
+                const rSt = (resolved.subtasks || []).find(s => s.id === subtask.id);
+                if (rSt) {
+                    ta.value = rSt.description || '';
+                    // Update currentSubtasks so save picks up the resolved text
+                    currentSubtasks[index] = { ...subtask, description: rSt.description || '', description_is_paste: false };
+                }
+            }
+            ta.placeholder = 'Description (optional — no character limit)';
+        }
+    } else {
+        document.getElementById('subtaskEditDescription').value = subtask.description || '';
+        document.getElementById('subtaskEditModal').classList.add('show');
+        document.getElementById('subtaskEditName').focus();
+    }
 }
 
 function closeSubtaskModal() {
@@ -677,14 +700,50 @@ function closeConfirmModal() {
     pendingDeleteCallback = null;
 }
 
-// Show task details modal
-function showTaskModal(taskId) {
+// Fetch a single task with descriptions resolved from koda-paste
+async function fetchResolvedTask(taskId) {
+    const resp = await fetch(`/api/tasks/${taskId}`);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return data.success ? data.task : null;
+}
+
+// Render subtasks list HTML (shared between modal and edit form)
+function renderSubtasksHtml(task) {
+    if (!task.subtasks || task.subtasks.length === 0) return null;
+    let html = '<ul class="subtasks-list">';
+    task.subtasks.forEach((st, idx) => {
+        const checkbox = st.completed ? '☑' : '☐';
+        const subtaskId = st.id || (idx + 1);
+        const descriptionHtml = st.description
+            ? `<div class="subtask-meta">📝 ${escapeHtml(st.description)}</div>`
+            : '';
+        const urlHtml = st.url
+            ? `<div class="subtask-meta">🔗 <a href="${escapeHtml(st.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(st.url)}</a></div>`
+            : '';
+        html += `
+            <li class="subtask-item ${st.completed ? 'completed' : ''}">
+                <div class="subtask-main">
+                    <span class="subtask-toggle" title="Toggle completion" onclick="toggleModalSubtask('${task.id}', ${subtaskId})">${checkbox}</span>
+                    #${subtaskId} ${escapeHtml(st.name)}
+                </div>
+                ${descriptionHtml}
+                ${urlHtml}
+            </li>
+        `;
+    });
+    html += '</ul>';
+    return html;
+}
+
+// Show task details modal — fetches resolved description from server
+async function showTaskModal(taskId) {
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
 
+    // Open modal immediately with known fields
     document.getElementById('modalTaskName').textContent = task.name;
 
-    // Set status with badge styling
     const statusEl = document.getElementById('modalStatus');
     const statusClass = task.status.toLowerCase().replace(' ', '');
     statusEl.innerHTML = `<span class="task-status status-${statusClass}">${task.status}</span>`;
@@ -692,7 +751,6 @@ function showTaskModal(taskId) {
     document.getElementById('modalDeadline').textContent = formatDeadline(task.deadline) || 'No deadline';
     document.getElementById('modalPriority').textContent = colourOptions[task.colour]?.label || 'Default';
     document.getElementById('modalOwner').textContent = task.owner || 'Unassigned';
-    document.getElementById('modalDescription').textContent = task.description || 'No description';
 
     const urlSection = document.getElementById('modalUrlSection');
     const urlLink = document.getElementById('modalUrl');
@@ -704,32 +762,21 @@ function showTaskModal(taskId) {
         urlSection.style.display = 'none';
     }
 
-    // Render subtasks if available
-    const subtasksContainer = document.getElementById('modalSubtasks');
-    if (task.subtasks && task.subtasks.length > 0) {
-        let subtasksHtml = '<ul class="subtasks-list">';
-        task.subtasks.forEach((st, idx) => {
-            const checkbox = st.completed ? '☑' : '☐';
-            const subtaskId = st.id || (idx + 1);
-            const descriptionHtml = st.description
-                ? `<div class="subtask-meta">📝 ${escapeHtml(st.description)}</div>`
-                : '';
-            const urlHtml = st.url
-                ? `<div class="subtask-meta">🔗 <a href="${escapeHtml(st.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(st.url)}</a></div>`
-                : '';
+    // Show spinner for description while we fetch resolved content
+    const descLoading = document.getElementById('modalDescriptionLoading');
+    const descText = document.getElementById('modalDescriptionText');
+    if (task.description_is_paste) {
+        descLoading.style.display = 'inline';
+        descText.textContent = '';
+    } else {
+        descLoading.style.display = 'none';
+        descText.textContent = task.description || 'No description';
+    }
 
-            subtasksHtml += `
-                <li class="subtask-item ${st.completed ? 'completed' : ''}">
-                    <div class="subtask-main">
-                        <span class="subtask-toggle" title="Toggle completion" onclick="toggleModalSubtask('${task.id}', ${subtaskId})">${checkbox}</span>
-                        #${subtaskId} ${escapeHtml(st.name)}
-                    </div>
-                    ${descriptionHtml}
-                    ${urlHtml}
-                </li>
-            `;
-        });
-        subtasksHtml += '</ul>';
+    // Show subtasks from cached data immediately (descriptions may still be paste URLs)
+    const subtasksContainer = document.getElementById('modalSubtasks');
+    const subtasksHtml = renderSubtasksHtml(task);
+    if (subtasksHtml) {
         subtasksContainer.innerHTML = '<span class="detail-label"><i class="fa-solid fa-list-check"></i> Sub-tasks</span>' + subtasksHtml;
         subtasksContainer.style.display = 'block';
     } else {
@@ -749,10 +796,30 @@ function showTaskModal(taskId) {
     };
 
     taskModal.classList.add('show');
+
+    // Fetch resolved task (resolves paste URLs for description + subtask descriptions)
+    const resolved = await fetchResolvedTask(taskId);
+    if (resolved && taskModal.classList.contains('show')) {
+        // Update description
+        descLoading.style.display = 'none';
+        descText.textContent = resolved.description || 'No description';
+
+        // Re-render subtasks with resolved descriptions if any were paste URLs
+        const anySubtaskPaste = (task.subtasks || []).some(st => st.description_is_paste);
+        if (anySubtaskPaste) {
+            const resolvedHtml = renderSubtasksHtml(resolved);
+            if (resolvedHtml) {
+                subtasksContainer.innerHTML = '<span class="detail-label"><i class="fa-solid fa-list-check"></i> Sub-tasks</span>' + resolvedHtml;
+            }
+        }
+    } else if (!resolved) {
+        descLoading.style.display = 'none';
+        descText.textContent = task.description || 'No description';
+    }
 }
 
-// Edit task - populate form with task data
-function editTask(taskId) {
+// Edit task - populate form with task data (fetches resolved description from server)
+async function editTask(taskId) {
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
 
@@ -761,7 +828,14 @@ function editTask(taskId) {
     document.getElementById('taskName').value = task.name;
     document.getElementById('taskStatus').value = task.status;
     document.getElementById('taskColour').value = task.colour || 'default';
-    document.getElementById('taskDescription').value = task.description || '';
+    // Show placeholder while resolving; will be replaced once fetch completes
+    const descTextarea = document.getElementById('taskDescription');
+    if (task.description_is_paste) {
+        descTextarea.value = '';
+        descTextarea.placeholder = 'Loading description…';
+    } else {
+        descTextarea.value = task.description || '';
+    }
     document.getElementById('taskUrl').value = task.url || '';
 
     if (document.getElementById('taskOwner')) {
@@ -788,6 +862,25 @@ function editTask(taskId) {
     // Expand form panel and scroll to it
     formPanel.classList.add('expanded');
     formPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    // Fetch resolved description (and subtask descriptions) if any are paste URLs
+    const anyPaste = task.description_is_paste || (task.subtasks || []).some(st => st.description_is_paste);
+    if (anyPaste) {
+        fetchResolvedTask(taskId).then(resolved => {
+            if (!resolved || editingTaskId !== taskId) return;
+            // Only update description if it's still showing the placeholder
+            if (task.description_is_paste) {
+                const ta = document.getElementById('taskDescription');
+                ta.value = resolved.description || '';
+                ta.placeholder = 'Add details about this task (optional — no character limit)';
+            }
+            // Update subtasks with resolved descriptions if any were paste URLs
+            if ((task.subtasks || []).some(st => st.description_is_paste)) {
+                currentSubtasks = normalizeSubtaskList(resolved.subtasks || []);
+                renderSubtasksList();
+            }
+        });
+    }
 }
 
 // Drag and Drop Manager - Encapsulated state management

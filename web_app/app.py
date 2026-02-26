@@ -13,6 +13,9 @@ import uuid
 from datetime import datetime, timezone
 from functools import wraps
 from typing import Any
+from urllib.request import Request as _UrlReq, urlopen as _urlopen
+from urllib.parse import urlparse as _urlparse
+from urllib.error import URLError as _URLError
 from dotenv import load_dotenv
 
 # Try to import firebase_admin (optional)
@@ -28,6 +31,68 @@ except ImportError:
     logging.warning("firebase_admin not available, using local storage only")
 
 load_dotenv()
+
+# ── koda-paste integration ────────────────────────────────────────────────────
+# The web app uses koda-paste to store and retrieve long task/subtask descriptions.
+# KODA_PASTE_URL should point to the plain-HTTP API port (default: 8845).
+_PASTE_BASE = os.environ.get("KODA_PASTE_URL", "http://100.123.59.91:8845").rstrip("/")
+_DESCRIPTION_PASTE_THRESHOLD = int(os.environ.get("KODA_PASTE_THRESHOLD", "500"))
+
+
+def _is_paste_url(value: str) -> bool:
+    """Return True if value looks like a koda-paste share URL."""
+    if not value:
+        return False
+    # Match any host variant (IP or Tailscale hostname) with a /p/<id> path
+    return "/p/" in value and (
+        "100.123.59.91" in value
+        or "tail9ac53b.ts.net" in value
+    )
+
+
+def _resolve_description(desc: str) -> str:
+    """If desc is a paste URL, fetch and return the raw text content; else return as-is."""
+    if not desc or not _is_paste_url(desc):
+        return desc
+    try:
+        path = _urlparse(desc).path.rstrip("/").split("/")
+        idx = next((i for i, p in enumerate(path) if p == "p"), None)
+        if idx is None or idx + 1 >= len(path):
+            return desc
+        paste_id = path[idx + 1]
+        raw_url = f"{_PASTE_BASE}/raw/{paste_id}"
+        req = _UrlReq(raw_url, headers={"Accept": "text/plain"})
+        with _urlopen(req, timeout=4) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"[paste] Failed to resolve {desc}: {e}")
+    return desc
+
+
+def _offload_description(desc: str, title: str = "Description") -> str:
+    """Upload desc to koda-paste if over threshold; return paste URL or original.
+    Best-effort — returns original text on any failure."""
+    if not desc or len(desc) <= _DESCRIPTION_PASTE_THRESHOLD or _is_paste_url(desc):
+        return desc
+    try:
+        payload = json.dumps({"content": desc, "title": title}).encode()
+        req = _UrlReq(
+            f"{_PASTE_BASE}/api/paste",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with _urlopen(req, timeout=5) as resp:
+            result = json.loads(resp.read().decode())
+            url = result.get("url")
+            if url:
+                logging.getLogger(__name__).info(f"[paste] Offloaded description: {url}")
+                return url
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"[paste] Failed to offload description: {e}")
+    return desc
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
@@ -498,13 +563,46 @@ def tasks():
 @app.route('/api/tasks', methods=['GET'])
 @login_required
 def get_tasks():
-    """API endpoint to get all tasks"""
+    """API endpoint to get all tasks. Descriptions are returned as-is (paste URLs not resolved).
+    Use GET /api/tasks/<task_id> to get a single task with description resolved."""
     username = session.get('username')
     try:
-        tasks = load_tasks(username)
-        return jsonify({'success': True, 'tasks': tasks})
+        task_list = load_tasks(username)
+        # Annotate each task so the client knows which descriptions are paste URLs
+        # without needing to resolve (avoids N network calls on page load).
+        for task in task_list:
+            task['description_is_paste'] = _is_paste_url(task.get('description', ''))
+            for st in task.get('subtasks', []):
+                st['description_is_paste'] = _is_paste_url(st.get('description', ''))
+        return jsonify({'success': True, 'tasks': task_list})
     except Exception as e:
         logger.error(f"Error loading tasks: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/tasks/<task_id>', methods=['GET'])
+@login_required
+def get_task(task_id):
+    """Return a single task with description (and subtask descriptions) resolved from koda-paste."""
+    username = session.get('username')
+    try:
+        task_list = load_tasks(username)
+        for task in task_list:
+            if task['id'] == task_id:
+                t = dict(task)
+                t['description'] = _resolve_description(t.get('description', ''))
+                t['description_is_paste'] = False  # already resolved
+                subtasks = []
+                for st in normalize_subtasks(t.get('subtasks', [])):
+                    st = dict(st)
+                    st['description'] = _resolve_description(st.get('description', ''))
+                    st['description_is_paste'] = False
+                    subtasks.append(st)
+                t['subtasks'] = subtasks
+                return jsonify({'success': True, 'task': t})
+        return jsonify({'success': False, 'error': 'Task not found'}), 404
+    except Exception as e:
+        logger.error(f"Error fetching task {task_id}: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -525,7 +623,7 @@ def create_task():
             'deadline': data.get('deadline'),
             'status': data.get('status', 'To Do'),
             'order': len(tasks),
-            'description': data.get('description', ''),
+            'description': _offload_description(data.get('description', ''), title=f"{data['name']} — Description"),
             'url': data.get('url', ''),
             'owner': data.get('owner', ''),
             'colour': data.get('colour', 'default'),
@@ -589,13 +687,17 @@ def update_task(task_id):
                 }
                 before_subtasks = normalize_subtasks(task.get('subtasks', []))
 
-                # Apply updates
+                # Apply updates — offload description if too long for DB inline storage
+                _new_desc = _offload_description(
+                    data.get('description', task.get('description', '')),
+                    title=f"{task.get('name', task_id)} — Description",
+                )
                 task.update({
                     'name': data.get('name', task['name']),
                     'uuid': task.get('uuid', str(uuid.uuid4())),
                     'deadline': data.get('deadline', task.get('deadline')),
                     'status': data.get('status', task['status']),
-                    'description': data.get('description', task.get('description', '')),
+                    'description': _new_desc,
                     'url': data.get('url', task.get('url', '')),
                     'owner': data.get('owner', task.get('owner', '')),
                     'colour': data.get('colour', task.get('colour', 'default')),
@@ -759,7 +861,10 @@ def add_subtask(task_id):
         new_subtask = {
             'id': next_id,
             'name': name,
-            'description': (data.get('description') or '').strip(),
+            'description': _offload_description(
+                (data.get('description') or '').strip(),
+                title=f"{target_task.get('name', task_id)} — Subtask #{next_id}",
+            ),
             'url': (data.get('url') or '').strip(),
             'completed': False,
         }
@@ -815,10 +920,15 @@ def edit_subtask(task_id, subtask_id):
         edit_before = {}
         edit_after = {}
 
-        # Only update provided fields
+        # Only update provided fields; offload description to koda-paste if too long
         for field in ('name', 'description', 'url'):
             if field in data:
                 new_val = (data[field] or '').strip()
+                if field == 'description':
+                    new_val = _offload_description(
+                        new_val,
+                        title=f"{target_task.get('name', task_id)} — Subtask #{subtask_id}",
+                    )
                 old_val = target_subtask.get(field, '')
                 if old_val != new_val:
                     edit_before[field] = old_val

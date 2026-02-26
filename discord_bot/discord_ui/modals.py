@@ -18,21 +18,24 @@ from services.paste_service import offload_description, is_paste_url, DESCRIPTIO
 
 logger = logging.getLogger(__name__)
 
-_PASTE_PLACEHOLDER = "(stored via koda-paste — enter new text to replace)"
+_PASTE_PLACEHOLDER = "(description stored externally — open the web app to view or edit the full text)"
 _MODAL_DESC_MAX = 900  # leave headroom below Discord's 1000-char TextInput limit
+
+# Web app base URL — shown in the description label when description is stored externally
+_WEB_APP_URL = os.environ.get("WEB_APP_URL", "")
 
 
 def _modal_description_default(description: str) -> tuple[str, bool]:
     """Return (default_text, was_paste) for a description TextInput default value.
 
-    - If already a paste URL: show placeholder, was_paste=True
-    - If too long to fit in modal: truncate with notice, was_paste=False
-    - Otherwise: return as-is, was_paste=False
+    - If already a paste URL: show placeholder (was_paste=True)
+    - If too long to fit in modal (edge case — inline storage): truncate with notice
+    - Otherwise: return as-is
     """
     if is_paste_url(description):
         return _PASTE_PLACEHOLDER, True
     if len(description) > _MODAL_DESC_MAX:
-        return description[:_MODAL_DESC_MAX] + "… [truncated — save to replace with full text]", False
+        return description[:_MODAL_DESC_MAX] + "… [truncated — edit full text in the web app]", False
     return description, False
 
 
@@ -265,10 +268,11 @@ class ConfigureTaskModal(ui.Modal, title="Configure Task"):
         self.add_item(self.deadline)
 
         desc_default, self._description_was_paste = _modal_description_default(current_description or "")
+        desc_label = "Description (edit long text in web app)" if self._description_was_paste else "Description"
         self.description = ui.TextInput(
-            label="Description",
+            label=desc_label,
             default=desc_default,
-            placeholder=f"Descriptions over {DESCRIPTION_PASTE_THRESHOLD} chars are stored via koda-paste",
+            placeholder=f"Short text here; descriptions over {DESCRIPTION_PASTE_THRESHOLD} chars → web app",
             required=False,
             style=discord.TextStyle.paragraph,
             max_length=1000,

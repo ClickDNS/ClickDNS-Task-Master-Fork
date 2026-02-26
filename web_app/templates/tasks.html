@@ -85,8 +85,8 @@
 
                         <div class="form-group form-span-full">
                             <label for="taskDescription">Description</label>
-                            <textarea id="taskDescription" class="form-control" rows="2"
-                                placeholder="Add details about this task (optional)"></textarea>
+                            <textarea id="taskDescription" class="form-control" rows="4"
+                                placeholder="Add details about this task (optional — no character limit)"></textarea>
                         </div>
 
                         <div class="form-group form-span-full">
@@ -182,7 +182,12 @@
 
             <div class="detail-section">
                 <span class="detail-label"><i class="fa-solid fa-align-left"></i> Description</span>
-                <div id="modalDescription" class="description-text"></div>
+                <div id="modalDescription" class="description-text">
+                    <span id="modalDescriptionLoading" style="display:none; color: var(--text-muted, #888);">
+                        <i class="fa-solid fa-spinner fa-spin"></i> Loading…
+                    </span>
+                    <span id="modalDescriptionText"></span>
+                </div>
             </div>
 
             <div class="detail-section" id="modalUrlSection" style="display:none;">
@@ -221,8 +226,8 @@
             </div>
             <div class="form-group">
                 <label for="subtaskEditDescription">Description</label>
-                <textarea id="subtaskEditDescription" class="form-control" rows="3" placeholder="Description (optional)"
-                    maxlength="1000"></textarea>
+                <textarea id="subtaskEditDescription" class="form-control" rows="3"
+                    placeholder="Description (optional — no character limit)"></textarea>
             </div>
             <div class="form-group">
                 <label for="subtaskEditUrl">URL</label>
