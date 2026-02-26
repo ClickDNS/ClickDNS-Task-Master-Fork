@@ -245,6 +245,40 @@ class SubtaskActionView(discord.ui.View):
     @discord.ui.button(label="✏️ Edit Sub-task", style=discord.ButtonStyle.primary)
     async def edit_subtask(self, interaction: discord.Interaction, button: Button):
         from discord_ui.modals import ConfigureSubtaskModal
+        from services.paste_service import offload_description, is_paste_url, DESCRIPTION_PASTE_THRESHOLD
+        from services.task_service import TaskService
+
+        # If subtask description exists and is long (over threshold) and is not
+        # already a paste URL, attempt to offload it to koda-paste before
+        # opening the modal so the modal can show the paste placeholder.
+        try:
+            existing_desc = self._subtask.get('description', '') if self._subtask else ''
+            if existing_desc and len(existing_desc) > DESCRIPTION_PASTE_THRESHOLD and not is_paste_url(existing_desc):
+                task_service = TaskService()
+                new_desc = offload_description(existing_desc, title=f"Subtask #{self.subtask_id} — Description")
+                if new_desc != existing_desc:
+                    try:
+                        await task_service.upsert_subtask_by_id(
+                            task_uuid=self.task_uuid,
+                            subtask_id=self.subtask_id,
+                            name=self._subtask.get('name', ''),
+                            description=new_desc,
+                            url=self._subtask.get('url', ''),
+                        )
+                        # refresh local subtask copy if possible
+                        refreshed = await task_service.get_task_by_uuid(self.task_uuid)
+                        if refreshed:
+                            for st in refreshed.subtasks:
+                                if st.get('id') == self.subtask_id:
+                                    self._subtask = st
+                                    break
+                    except Exception:
+                        # Ignore DB persistence failure — continue to open modal
+                        pass
+        except Exception:
+            # Non-fatal; proceed to open modal
+            pass
+
         await interaction.response.send_modal(ConfigureSubtaskModal(
             task_uuid=self.task_uuid,
             subtask_id=self.subtask_id,
