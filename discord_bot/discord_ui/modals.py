@@ -248,7 +248,7 @@ class ConfigureTaskModal(ui.Modal, title="Configure Task"):
 
         self.description = ui.TextInput(
             label="Description",
-            default=current_description or "",
+            default=(current_description or "")[:1000],
             required=False,
             style=discord.TextStyle.paragraph,
             max_length=1000,
@@ -485,7 +485,7 @@ class ConfigureSubtaskModal(ui.Modal):
 
         self.subtask_description = ui.TextInput(
             label="Description",
-            default=existing_subtask.get('description', ''),
+            default=existing_subtask.get('description', '')[:1000],
             placeholder="Optional sub-task description",
             required=False,
             style=discord.TextStyle.paragraph,
