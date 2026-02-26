@@ -38,7 +38,12 @@ def _paste_host_resolvable(hostname: str) -> bool:
 
 
 def upload_to_paste(content: str, title: str = "Paste") -> Optional[str]:
-    """Upload content to koda-paste and return the share URL, or None on failure."""
+    """Upload content to koda-paste and return the share URL, or None on failure.
+
+    If the configured KODA_PASTE_URL uses a hostname that fails DNS, but a
+    fallback IP (KODA_PASTE_FALLBACK_IP) is configured, attempt the upload
+    against the fallback IP (keeps the same scheme and port).
+    """
     global _PASTE_RETRY_AFTER
 
     now = time.time()
@@ -51,14 +56,46 @@ def upload_to_paste(content: str, title: str = "Paste") -> Optional[str]:
         _PASTE_RETRY_AFTER = now + _PASTE_FAILURE_BACKOFF_SECONDS
         return None
 
-    if not _paste_host_resolvable(parsed_url.hostname or ""):
+    host = parsed_url.hostname or ""
+    port = parsed_url.port
+
+    # If hostname is not resolvable, optionally try a fallback IP from env
+    if not _paste_host_resolvable(host):
+        fallback_ip = os.environ.get("KODA_PASTE_FALLBACK_IP") or os.environ.get("KODA_PASTE_IP")
+        if fallback_ip:
+            logger.info(f"koda-paste hostname '{host}' not resolvable — attempting fallback to IP {fallback_ip}")
+            # Build a fallback base URL keeping scheme and port
+            netloc = f"{fallback_ip}:{port}" if port else fallback_ip
+            fallback_base = f"{parsed_url.scheme}://{netloc}"
+            try:
+                payload = json.dumps({"content": content, "title": title}).encode()
+                req = Request(
+                    f"{fallback_base}/api/paste",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urlopen(req, timeout=5) as resp:
+                    result = json.loads(resp.read().decode())
+                    # Return full URL using the original paste ID path produced by server
+                    url = result.get("url")
+                    if url and url.startswith("/"):
+                        # server returned a relative path — make absolute against fallback_base
+                        return fallback_base.rstrip("/") + url
+                    return url
+            except (URLError, OSError, json.JSONDecodeError, KeyError) as e:
+                logger.warning(f"Failed to upload to koda-paste via fallback IP {fallback_ip}: {e}")
+                _PASTE_RETRY_AFTER = now + _PASTE_FAILURE_BACKOFF_SECONDS
+                return None
+
         logger.warning(
-            f"koda-paste DNS lookup failed for '{parsed_url.hostname}' — "
-            "ensure KODA_PASTE_URL is reachable from this host"
+            f"koda-paste DNS lookup failed for '{host}' — "
+            "ensure KODA_PASTE_URL is reachable from this host or set KODA_PASTE_FALLBACK_IP"
         )
         _PASTE_RETRY_AFTER = now + _PASTE_DNS_BACKOFF_SECONDS
         return None
 
+    # Host is resolvable — try the configured URL
     try:
         payload = json.dumps({"content": content, "title": title}).encode()
         req = Request(
@@ -79,7 +116,17 @@ def upload_to_paste(content: str, title: str = "Paste") -> Optional[str]:
 def is_paste_url(value: str) -> bool:
     """Return True if the value looks like a koda-paste URL (stored description)."""
     paste_base = _PASTE_URL.rstrip("/")
-    return value.startswith(paste_base + "/p/")
+    fallback_ip = os.environ.get("KODA_PASTE_FALLBACK_IP") or os.environ.get("KODA_PASTE_IP")
+    if value.startswith(paste_base + "/p/"):
+        return True
+    if fallback_ip:
+        # Accept pastes created via fallback base as well
+        parsed = urlparse(_PASTE_URL)
+        port = parsed.port
+        netloc = f"{fallback_ip}:{port}" if port else fallback_ip
+        fallback_base = f"{parsed.scheme}://{netloc}"
+        return value.startswith(fallback_base + "/p/")
+    return False
 
 
 def offload_description(description: str, title: str = "Description") -> str:
