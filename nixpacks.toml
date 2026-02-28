@@ -1,5 +1,2 @@
 [phases.setup]
 nixPkgs = ["tailscale"]
-
-[start]
-cmd = "bash start.sh"
