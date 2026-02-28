@@ -2,6 +2,7 @@
 Discord modal forms for task input
 """
 import asyncio
+import os
 import discord
 from discord import ui
 from typing import Optional
