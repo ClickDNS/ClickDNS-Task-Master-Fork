@@ -36,6 +36,7 @@ if [ -n "${TAILSCALE_AUTH_KEY:-}" ]; then
         --tun=userspace-networking \
         --statedir=/var/lib/tailscale \
         --socket=/var/run/tailscale/tailscaled.sock \
+        --outbound-http-proxy-listen=localhost:1055 \
         > /tmp/tailscaled.log 2>&1 &
     TAILSCALED_PID=$!
 
@@ -70,4 +71,12 @@ else
 fi
 
 echo "[start] Starting gunicorn..."
+if [ -n "${TAILSCALE_AUTH_KEY:-}" ]; then
+    # Route HTTP/HTTPS through Tailscale's outbound proxy so gunicorn can reach
+    # Tailscale IPs (e.g. koda-paste on 100.123.59.91) in userspace-networking mode
+    export http_proxy="http://localhost:1055"
+    export https_proxy="http://localhost:1055"
+    export HTTP_PROXY="http://localhost:1055"
+    export HTTPS_PROXY="http://localhost:1055"
+fi
 exec gunicorn app:app
