@@ -12,8 +12,8 @@ if [ -n "$TAILSCALE_AUTH_KEY" ]; then
     TAILSCALE_VERSION="1.80.2"
     curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_amd64.tgz" \
         | tar -C /usr/local/bin --strip-components=1 -xz \
-            "tailscale_${TAILSCALE_VERSION}_linux_amd64/tailscale" \
-            "tailscale_${TAILSCALE_VERSION}_linux_amd64/tailscaled"
+            "tailscale_${TAILSCALE_VERSION}_amd64/tailscale" \
+            "tailscale_${TAILSCALE_VERSION}_amd64/tailscaled"
 
     echo "[start] Starting tailscaled in userspace mode..."
     mkdir -p /var/run/tailscale /var/lib/tailscale
