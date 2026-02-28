@@ -72,11 +72,9 @@ fi
 
 echo "[start] Starting gunicorn..."
 if [ -n "${TAILSCALE_AUTH_KEY:-}" ]; then
-    # Route HTTP/HTTPS through Tailscale's outbound proxy so gunicorn can reach
-    # Tailscale IPs (e.g. koda-paste on 100.123.59.91) in userspace-networking mode
-    export http_proxy="http://localhost:1055"
-    export https_proxy="http://localhost:1055"
-    export HTTP_PROXY="http://localhost:1055"
-    export HTTPS_PROXY="http://localhost:1055"
+    # Tell the Flask app to route koda-paste calls through tailscaled's outbound
+    # HTTP proxy — required in userspace-networking mode where Tailscale IPs aren't
+    # directly routable from the container.
+    export KODA_PASTE_PROXY="http://localhost:1055"
 fi
 exec gunicorn app:app

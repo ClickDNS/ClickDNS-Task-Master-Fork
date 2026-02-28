@@ -13,10 +13,9 @@ import uuid
 from datetime import datetime, timezone
 from functools import wraps
 from typing import Any
-from urllib.request import Request as _UrlReq, urlopen as _urlopen
 from urllib.parse import urlparse as _urlparse
-from urllib.error import URLError as _URLError
 from dotenv import load_dotenv
+import requests as _requests
 
 # Try to import firebase_admin (optional)
 firebase_admin: Any = None
@@ -38,6 +37,15 @@ load_dotenv()
 _PASTE_BASE = os.environ.get("KODA_PASTE_URL", "http://100.123.59.91:8845").rstrip("/")
 _DESCRIPTION_PASTE_THRESHOLD = int(os.environ.get("KODA_PASTE_THRESHOLD", "500"))
 
+# Explicit proxy session for koda-paste — needed because tailscaled runs in
+# userspace-networking mode and traffic won't route to Tailscale IPs unless
+# sent through tailscaled's outbound HTTP proxy (localhost:1055).
+_PASTE_PROXY = os.environ.get("KODA_PASTE_PROXY", "")
+_paste_session = _requests.Session()
+if _PASTE_PROXY:
+    _paste_session.proxies = {"http": _PASTE_PROXY, "https": _PASTE_PROXY}
+    logging.getLogger(__name__).info(f"[paste] Using proxy: {_PASTE_PROXY}")
+
 
 def _is_paste_url(value: str) -> bool:
     """Return True if value looks like a koda-paste share URL."""
@@ -55,15 +63,11 @@ def _resolve_description(desc: str) -> str:
     if not desc or not _is_paste_url(desc):
         return desc
     try:
-        path = _urlparse(desc).path.rstrip("/").split("/")
-        idx = next((i for i, p in enumerate(path) if p == "p"), None)
-        if idx is None or idx + 1 >= len(path):
-            return desc
-        paste_id = path[idx + 1]
+        paste_id = _urlparse(desc).path.rstrip("/").split("/")[-1]
         raw_url = f"{_PASTE_BASE}/raw/{paste_id}"
-        req = _UrlReq(raw_url, headers={"Accept": "text/plain"})
-        with _urlopen(req, timeout=4) as resp:
-            return resp.read().decode("utf-8", errors="replace")
+        resp = _paste_session.get(raw_url, timeout=4, headers={"Accept": "text/plain"})
+        resp.raise_for_status()
+        return resp.text
     except Exception as e:
         logging.getLogger(__name__).warning(f"[paste] Failed to resolve {desc}: {e}")
     return desc
@@ -75,19 +79,16 @@ def _offload_description(desc: str, title: str = "Description") -> str:
     if not desc or len(desc) <= _DESCRIPTION_PASTE_THRESHOLD or _is_paste_url(desc):
         return desc
     try:
-        payload = json.dumps({"content": desc, "title": title}).encode()
-        req = _UrlReq(
+        resp = _paste_session.post(
             f"{_PASTE_BASE}/api/paste",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
+            json={"content": desc, "title": title},
+            timeout=5,
         )
-        with _urlopen(req, timeout=5) as resp:
-            result = json.loads(resp.read().decode())
-            url = result.get("url")
-            if url:
-                logging.getLogger(__name__).info(f"[paste] Offloaded description: {url}")
-                return url
+        resp.raise_for_status()
+        url = resp.json().get("url")
+        if url:
+            logging.getLogger(__name__).info(f"[paste] Offloaded description: {url}")
+            return url
     except Exception as e:
         logging.getLogger(__name__).warning(f"[paste] Failed to offload description: {e}")
     return desc
