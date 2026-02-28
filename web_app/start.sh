@@ -35,7 +35,7 @@ if [ -n "${TAILSCALE_AUTH_KEY:-}" ]; then
     tailscale --socket=/var/run/tailscale/tailscaled.sock up \
         --authkey="$TAILSCALE_AUTH_KEY" \
         --hostname="taskmaster-railway" \
-        --advertise-tags=tag:server \
+        --advertise-tags=tag:ci \
         --accept-routes \
         --shields-up
 
