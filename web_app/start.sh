@@ -61,6 +61,7 @@ if [ -n "${TAILSCALE_AUTH_KEY:-}" ]; then
         --authkey="$TAILSCALE_AUTH_KEY" \
         --hostname="taskmaster-railway" \
         --advertise-tags=tag:ci \
+        --ephemeral \
         --shields-up
 
     echo "[start] Connected:"
