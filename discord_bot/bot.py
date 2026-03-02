@@ -259,8 +259,8 @@ async def help_command(interaction: discord.Interaction):
 
     embed.add_field(
         name="Filter by Priority",
-        value="In the forum search bar, type **🔴** for Important, **🟠** for Moderately Important, "
-              "or **⚪** for Not Important/default tasks.",
+        value="In the forum search bar, type **🔴** for High Importance, **🟠** for Medium Importance, "
+              "**🔵** for Low Importance, or **⚪** for Default tasks.",
         inline=False
     )
 

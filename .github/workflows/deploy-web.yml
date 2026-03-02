@@ -1,0 +1,44 @@
+name: Deploy — Task-Master Web App
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web_app/**'
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          tags: tag:ci
+
+      - name: Deploy to VPS
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=no \
+            koda@100.123.59.91 << 'ENDSSH'
+          set -e
+
+          echo "▸ Pulling latest main..."
+          cd ~/projects/ClickDNS-Task-Master
+          git fetch origin
+          git reset --hard origin/main
+
+          echo "▸ Installing/updating dependencies..."
+          ./venv/bin/pip install -r web_app/requirements.txt -q --upgrade
+
+          echo "▸ Restarting task-master-web..."
+          systemctl --user restart task-master-web
+
+          echo "✅ task-master-web deployed"
+          ENDSSH

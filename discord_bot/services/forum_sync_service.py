@@ -15,10 +15,17 @@ class ForumSyncService:
     """Synchronize DB tasks to forum threads and back"""
 
     PRIORITY_EMOJIS = {
-        "Important": "🔴",
+        "Important":            "🔴",
         "Moderately Important": "🟠",
-        "Not Important": "⚪",
-        "default": "⚪",
+        "Low Importance":       "🔵",
+        "default":              "⚪",
+    }
+
+    IMPORTANCE_LABELS = {
+        "Important":            "High Importance",
+        "Moderately Important": "Medium Importance",
+        "Low Importance":       "Low Importance",
+        "default":              "Default",
     }
 
     def __init__(self):
@@ -67,9 +74,10 @@ class ForumSyncService:
         else:
             desc_display = desc
 
+        importance_label = self.IMPORTANCE_LABELS.get(task.colour, task.colour)
         lines = [
             f"**Status:** {task.status}",
-            f"**Priority:** {priority_emoji} {task.colour}",
+            f"**Importance:** {priority_emoji} {importance_label}",
             f"**Owner:** {task.owner or 'Unassigned'}",
             f"**Deadline:** {task.deadline_display or 'None'}",
             "",

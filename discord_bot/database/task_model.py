@@ -80,7 +80,7 @@ class Task:
     description: str = ""
     url: str = ""
     owner: str = ""
-    # Priority: default, Important, Moderately Important, Not Important
+    # Importance: default, Important, Moderately Important, Low Importance
     colour: str = "default"
     # List of subtask dictionaries
     subtasks: list = field(default_factory=list)
@@ -139,12 +139,12 @@ class Task:
 
     @property
     def priority_emoji(self) -> str:
-        """Get emoji for priority level"""
+        """Get emoji for importance level"""
         priority_map = {
-            "Important": "🔴",
-            "Moderately Important": "🟡",
-            "Not Important": "🟢",
-            "default": "⚪"
+            "Important":            "🔴",
+            "Moderately Important": "🟠",
+            "Low Importance":       "🔵",
+            "default":              "⚪",
         }
         return priority_map.get(self.colour, "⚪")
 
@@ -180,10 +180,10 @@ class Task:
 
 # Priority/Color options
 COLOUR_OPTIONS = {
-    "default": "Default",
-    "Important": "Important",
-    "Moderately Important": "Moderately Important",
-    "Not Important": "Not Important"
+    "default":              "Default",
+    "Important":            "High Importance",
+    "Moderately Important": "Medium Importance",
+    "Low Importance":       "Low Importance",
 }
 
 # Status options
