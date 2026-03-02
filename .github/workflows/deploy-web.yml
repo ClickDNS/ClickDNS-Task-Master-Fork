@@ -3,8 +3,6 @@ name: Deploy — Task-Master Web App
 on:
   push:
     branches: [main]
-    paths:
-      - 'web_app/**'
 
 jobs:
   deploy:
@@ -17,7 +15,7 @@ jobs:
         uses: tailscale/github-action@v2
         with:
           authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
-          tags: tag:ci
+          args: --advertise-tags=tag:ci
 
       - name: Deploy to VPS
         run: |
