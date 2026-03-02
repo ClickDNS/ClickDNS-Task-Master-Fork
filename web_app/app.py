@@ -182,8 +182,6 @@ COLOUR_OPTIONS = {
 
 
 def normalize_priority(colour):
-    if colour == "Not Important":
-        return "Low Importance"
     if colour in COLOUR_OPTIONS:
         return colour
     return "default"
@@ -358,7 +356,6 @@ def load_tasks(username):
     tasks = []
     migrated_missing_uuid = False
     migrated_subtasks = False
-    migrated_priority = False
 
     if USE_FIREBASE:
         try:
@@ -375,11 +372,8 @@ def load_tasks(username):
                     if task_data.get('subtasks', []) != normalized_subtasks:
                         migrated_subtasks = True
                     task_data['subtasks'] = normalized_subtasks
-                    normalized_colour = normalize_priority(
+                    task_data['colour'] = normalize_priority(
                         task_data.get('colour', 'default'))
-                    if task_data.get('colour', 'default') != normalized_colour:
-                        migrated_priority = True
-                    task_data['colour'] = normalized_colour
                     tasks.append(task_data)
         except Exception as e:
             logger.error(f"Failed to load tasks from Firebase: {e}")
@@ -401,11 +395,8 @@ def load_tasks(username):
                             if task_data.get('subtasks', []) != normalized_subtasks:
                                 migrated_subtasks = True
                             task_data['subtasks'] = normalized_subtasks
-                            normalized_colour = normalize_priority(
+                            task_data['colour'] = normalize_priority(
                                 task_data.get('colour', 'default'))
-                            if task_data.get('colour', 'default') != normalized_colour:
-                                migrated_priority = True
-                            task_data['colour'] = normalized_colour
                             tasks.append(task_data)
             except Exception as e:
                 logger.error(f"Failed to read local tasks file: {e}")
@@ -413,8 +404,8 @@ def load_tasks(username):
     # Sort tasks by order
     tasks.sort(key=lambda x: x.get('order', 0))
 
-    # Backfill UUIDs without changing existing task keys/IDs.
-    if (migrated_missing_uuid or migrated_subtasks or migrated_priority) and tasks:
+    # Backfill UUIDs and subtask schema without changing existing task keys/IDs.
+    if (migrated_missing_uuid or migrated_subtasks) and tasks:
         try:
             save_tasks(username, tasks)
         except Exception as e:

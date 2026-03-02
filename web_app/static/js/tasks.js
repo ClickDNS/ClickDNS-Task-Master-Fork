@@ -12,7 +12,6 @@ const PRIORITY_RANK = {
     'Important': 3,
     'Moderately Important': 2,
     'Low Importance': 1,
-    'Not Important': 1,
     'default': 0
 };
 

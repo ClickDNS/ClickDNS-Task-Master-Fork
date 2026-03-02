@@ -233,7 +233,7 @@ class TaskManager:
             "Important": {"bg": "#ffcdd2", "fg": "black"},  # Light red
             # Light yellow
             "Moderately Important": {"bg": "#fff9c4", "fg": "black"},
-            "Not Important": {"bg": "#c8e6c9", "fg": "black"},  # Light green
+            "Low Importance": {"bg": "#c8e6c9", "fg": "black"},  # Light green
             # removed Personal & Work as requested
         }
 

@@ -96,8 +96,6 @@ def validate_priority(priority: str) -> str:
         "low":              "Low Importance",
         "normal":           "default",
         "none":             "default",
-        # Legacy rename — in case any old value slips through
-        "not important":    "Low Importance",
     }
 
     mapped = aliases.get(priority.lower())
