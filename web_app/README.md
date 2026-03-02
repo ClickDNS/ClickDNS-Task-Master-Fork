@@ -10,7 +10,7 @@ A modern Python web application version of Task-Master, designed for deployment 
 - **Task Management**: Create, read, update, and delete tasks
 - **Task Status**: Track tasks as "To Do", "In Progress", or "Complete"
 - **Deadlines**: Set optional deadlines with date and time
-- **Priority Levels**: Assign priorities (Important, Moderately Important, Not Important)
+- **Priority Levels**: Assign priorities (Important, Moderately Important, Low Importance)
 - **Task Owners**: Assign tasks to specific owners
 - **Descriptions & URLs**: Add detailed descriptions and related URLs to tasks
 - **Drag & Drop**: Reorder tasks by dragging and dropping

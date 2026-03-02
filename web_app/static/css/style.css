@@ -559,10 +559,21 @@ select.form-control {
     display: inline-block;
 }
 
-.priority-dot-important { background: var(--accent-red); }
-.priority-dot-moderate { background: var(--accent-yellow); }
-.priority-dot-low { background: var(--accent-green); }
-.priority-dot-default { background: var(--text-tertiary); }
+.priority-dot-important {
+    background: var(--accent-red);
+}
+
+.priority-dot-moderate {
+    background: var(--accent-yellow);
+}
+
+.priority-dot-low {
+    background: #007aff;
+}
+
+.priority-dot-default {
+    background: var(--text-tertiary);
+}
 
 .priority-tasks {
     display: flex;
@@ -635,7 +646,7 @@ select.form-control {
 }
 
 .priority-low {
-    border-left: 3px solid var(--accent-green);
+    border-left: 3px solid #007aff;
 }
 
 .task-info {
@@ -1035,7 +1046,9 @@ select.form-control {
     transition: opacity var(--transition-fast);
 }
 
-.subtask-checkbox:hover { opacity: 0.7; }
+.subtask-checkbox:hover {
+    opacity: 0.7;
+}
 
 .subtask-name {
     flex: 1;
@@ -1060,7 +1073,9 @@ select.form-control {
     text-decoration: none;
 }
 
-.subtask-form-detail a:hover { text-decoration: underline; }
+.subtask-form-detail a:hover {
+    text-decoration: underline;
+}
 
 .subtasks-form-list li.subtask-done .subtask-name {
     text-decoration: line-through;
@@ -1079,7 +1094,9 @@ select.form-control {
     border-radius: var(--radius-sm);
 }
 
-.btn-subtask-delete:hover { opacity: 1; }
+.btn-subtask-delete:hover {
+    opacity: 1;
+}
 
 .subtask-add-control {
     display: flex;
@@ -1139,7 +1156,9 @@ select.form-control {
     transition: opacity var(--transition-fast);
 }
 
-.subtask-toggle:hover { opacity: 0.7; }
+.subtask-toggle:hover {
+    opacity: 0.7;
+}
 
 .subtask-item.completed .subtask-main {
     text-decoration: line-through;
@@ -1246,18 +1265,39 @@ input[type="checkbox"] {
 
 /* === Animations === */
 @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(4px); }
-    to { opacity: 1; transform: translateY(0); }
+    from {
+        opacity: 0;
+        transform: translateY(4px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 @keyframes modalSlideIn {
-    from { opacity: 0; transform: scale(0.96) translateY(8px); }
-    to { opacity: 1; transform: scale(1) translateY(0); }
+    from {
+        opacity: 0;
+        transform: scale(0.96) translateY(8px);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
 }
 
 @keyframes slideUp {
-    from { opacity: 0; transform: translateY(12px); }
-    to { opacity: 1; transform: translateY(0); }
+    from {
+        opacity: 0;
+        transform: translateY(12px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 /* === Responsive === */

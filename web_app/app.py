@@ -34,8 +34,10 @@ load_dotenv()
 # ── koda-paste integration ────────────────────────────────────────────────────
 # The web app uses koda-paste to store and retrieve long task/subtask descriptions.
 # KODA_PASTE_URL should point to the plain-HTTP API port (default: 8845).
-_PASTE_BASE = os.environ.get("KODA_PASTE_URL", "http://100.123.59.91:8845").rstrip("/")
-_DESCRIPTION_PASTE_THRESHOLD = int(os.environ.get("KODA_PASTE_THRESHOLD", "500"))
+_PASTE_BASE = os.environ.get(
+    "KODA_PASTE_URL", "http://100.123.59.91:8845").rstrip("/")
+_DESCRIPTION_PASTE_THRESHOLD = int(
+    os.environ.get("KODA_PASTE_THRESHOLD", "500"))
 
 # Explicit proxy session for koda-paste — needed because tailscaled runs in
 # userspace-networking mode and traffic won't route to Tailscale IPs unless
@@ -65,11 +67,13 @@ def _resolve_description(desc: str) -> str:
     try:
         paste_id = _urlparse(desc).path.rstrip("/").split("/")[-1]
         raw_url = f"{_PASTE_BASE}/raw/{paste_id}"
-        resp = _paste_session.get(raw_url, timeout=4, headers={"Accept": "text/plain"})
+        resp = _paste_session.get(raw_url, timeout=4, headers={
+                                  "Accept": "text/plain"})
         resp.raise_for_status()
         return resp.text
     except Exception as e:
-        logging.getLogger(__name__).warning(f"[paste] Failed to resolve {desc}: {e}")
+        logging.getLogger(__name__).warning(
+            f"[paste] Failed to resolve {desc}: {e}")
     return desc
 
 
@@ -87,13 +91,16 @@ def _offload_description(desc: str, title: str = "Description") -> str:
         resp.raise_for_status()
         url = resp.json().get("url")
         if url:
-            logging.getLogger(__name__).info(f"[paste] Offloaded description: {url}")
+            logging.getLogger(__name__).info(
+                f"[paste] Offloaded description: {url}")
             return url
     except Exception as e:
-        logging.getLogger(__name__).warning(f"[paste] Failed to offload description: {e}")
+        logging.getLogger(__name__).warning(
+            f"[paste] Failed to offload description: {e}")
     return desc
 
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
@@ -170,8 +177,16 @@ COLOUR_OPTIONS = {
     "default": {"label": "Default", "class": ""},
     "Important": {"label": "Important", "class": "priority-high"},
     "Moderately Important": {"label": "Moderately Important", "class": "priority-medium"},
-    "Not Important": {"label": "Not Important", "class": "priority-low"},
+    "Low Importance": {"label": "Low Importance", "class": "priority-low"},
 }
+
+
+def normalize_priority(colour):
+    if colour == "Not Important":
+        return "Low Importance"
+    if colour in COLOUR_OPTIONS:
+        return colour
+    return "default"
 
 
 def normalize_subtasks(subtasks):
@@ -343,6 +358,7 @@ def load_tasks(username):
     tasks = []
     migrated_missing_uuid = False
     migrated_subtasks = False
+    migrated_priority = False
 
     if USE_FIREBASE:
         try:
@@ -359,6 +375,11 @@ def load_tasks(username):
                     if task_data.get('subtasks', []) != normalized_subtasks:
                         migrated_subtasks = True
                     task_data['subtasks'] = normalized_subtasks
+                    normalized_colour = normalize_priority(
+                        task_data.get('colour', 'default'))
+                    if task_data.get('colour', 'default') != normalized_colour:
+                        migrated_priority = True
+                    task_data['colour'] = normalized_colour
                     tasks.append(task_data)
         except Exception as e:
             logger.error(f"Failed to load tasks from Firebase: {e}")
@@ -380,6 +401,11 @@ def load_tasks(username):
                             if task_data.get('subtasks', []) != normalized_subtasks:
                                 migrated_subtasks = True
                             task_data['subtasks'] = normalized_subtasks
+                            normalized_colour = normalize_priority(
+                                task_data.get('colour', 'default'))
+                            if task_data.get('colour', 'default') != normalized_colour:
+                                migrated_priority = True
+                            task_data['colour'] = normalized_colour
                             tasks.append(task_data)
             except Exception as e:
                 logger.error(f"Failed to read local tasks file: {e}")
@@ -388,7 +414,7 @@ def load_tasks(username):
     tasks.sort(key=lambda x: x.get('order', 0))
 
     # Backfill UUIDs without changing existing task keys/IDs.
-    if (migrated_missing_uuid or migrated_subtasks) and tasks:
+    if (migrated_missing_uuid or migrated_subtasks or migrated_priority) and tasks:
         try:
             save_tasks(username, tasks)
         except Exception as e:
@@ -413,7 +439,7 @@ def save_tasks(username, tasks):
             'description': task.get('description', ''),
             'url': task.get('url', ''),
             'owner': task.get('owner', ''),
-            'colour': task.get('colour', 'default'),
+            'colour': normalize_priority(task.get('colour', 'default')),
             'subtasks': normalize_subtasks(task.get('subtasks', [])),
         }
 
@@ -572,9 +598,11 @@ def get_tasks():
         # Annotate each task so the client knows which descriptions are paste URLs
         # without needing to resolve (avoids N network calls on page load).
         for task in task_list:
-            task['description_is_paste'] = _is_paste_url(task.get('description', ''))
+            task['description_is_paste'] = _is_paste_url(
+                task.get('description', ''))
             for st in task.get('subtasks', []):
-                st['description_is_paste'] = _is_paste_url(st.get('description', ''))
+                st['description_is_paste'] = _is_paste_url(
+                    st.get('description', ''))
         return jsonify({'success': True, 'tasks': task_list})
     except Exception as e:
         logger.error(f"Error loading tasks: {e}")
@@ -591,12 +619,14 @@ def get_task(task_id):
         for task in task_list:
             if task['id'] == task_id:
                 t = dict(task)
-                t['description'] = _resolve_description(t.get('description', ''))
+                t['description'] = _resolve_description(
+                    t.get('description', ''))
                 t['description_is_paste'] = False  # already resolved
                 subtasks = []
                 for st in normalize_subtasks(t.get('subtasks', [])):
                     st = dict(st)
-                    st['description'] = _resolve_description(st.get('description', ''))
+                    st['description'] = _resolve_description(
+                        st.get('description', ''))
                     st['description_is_paste'] = False
                     subtasks.append(st)
                 t['subtasks'] = subtasks
@@ -627,7 +657,7 @@ def create_task():
             'description': _offload_description(data.get('description', ''), title=f"{data['name']} — Description"),
             'url': data.get('url', ''),
             'owner': data.get('owner', ''),
-            'colour': data.get('colour', 'default'),
+            'colour': normalize_priority(data.get('colour', 'default')),
             'subtasks': normalize_subtasks(data.get('subtasks', [])),
         }
 
@@ -701,7 +731,7 @@ def update_task(task_id):
                     'description': _new_desc,
                     'url': data.get('url', task.get('url', '')),
                     'owner': data.get('owner', task.get('owner', '')),
-                    'colour': data.get('colour', task.get('colour', 'default')),
+                    'colour': normalize_priority(data.get('colour', task.get('colour', 'default'))),
                     'subtasks': normalize_subtasks(data.get('subtasks', task.get('subtasks', []))),
                 })
 
@@ -951,7 +981,8 @@ def edit_subtask(task_id, subtask_id):
 
         return jsonify({'success': True, 'subtask': target_subtask})
     except Exception as e:
-        logger.error(f"Error editing subtask {subtask_id} of task {task_id}: {e}")
+        logger.error(
+            f"Error editing subtask {subtask_id} of task {task_id}: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -998,7 +1029,8 @@ def delete_subtask(task_id, subtask_id):
 
         return jsonify({'success': True, 'subtask': deleted_subtask})
     except Exception as e:
-        logger.error(f"Error deleting subtask {subtask_id} of task {task_id}: {e}")
+        logger.error(
+            f"Error deleting subtask {subtask_id} of task {task_id}: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -1030,7 +1062,8 @@ def toggle_subtask(task_id, subtask_id):
             return jsonify({'success': False, 'error': f'Subtask not found: {subtask_id}'}), 404
 
         # Toggle
-        target_subtask['completed'] = not target_subtask.get('completed', False)
+        target_subtask['completed'] = not target_subtask.get(
+            'completed', False)
         target_task['subtasks'] = normalize_subtasks(subtasks)
         save_tasks(username, tasks)
 
@@ -1047,7 +1080,8 @@ def toggle_subtask(task_id, subtask_id):
 
         return jsonify({'success': True, 'subtask': target_subtask})
     except Exception as e:
-        logger.error(f"Error toggling subtask {subtask_id} of task {task_id}: {e}")
+        logger.error(
+            f"Error toggling subtask {subtask_id} of task {task_id}: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -1071,16 +1105,17 @@ def reorder_tasks():
                 return jsonify({'success': False, 'error': f'Task id not found: {tid}'}), 400
 
         # All provided tasks must belong to the same priority (colour)
-        group_colour = task_map[task_ids[0]].get('colour', 'default')
+        group_colour = normalize_priority(
+            task_map[task_ids[0]].get('colour', 'default'))
         for tid in task_ids:
-            if task_map[tid].get('colour', 'default') != group_colour:
+            if normalize_priority(task_map[tid].get('colour', 'default')) != group_colour:
                 return jsonify({'success': False, 'error': 'Reorder must be within a single priority group'}), 400
 
         provided_set = set(task_ids)
 
         # Ensure provided ids are a subset of the tasks that have the same colour
-        group_task_ids = [t['id'] for t in tasks if t.get(
-            'colour', 'default') == group_colour]
+        group_task_ids = [t['id'] for t in tasks if normalize_priority(t.get(
+            'colour', 'default')) == group_colour]
         if not provided_set.issubset(set(group_task_ids)):
             return jsonify({'success': False, 'error': 'Invalid task ids for priority group'}), 400
 
@@ -1088,7 +1123,7 @@ def reorder_tasks():
         new_order_iter = iter(task_ids)
         new_tasks = []
         for t in tasks:
-            if t.get('colour', 'default') == group_colour and t['id'] in provided_set:
+            if normalize_priority(t.get('colour', 'default')) == group_colour and t['id'] in provided_set:
                 # take the next id from the provided ordering
                 next_id = next(new_order_iter)
                 new_tasks.append(task_map[next_id])

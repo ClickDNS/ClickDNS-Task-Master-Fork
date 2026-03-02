@@ -160,7 +160,7 @@ For detailed documentation, troubleshooting, and advanced configuration, see the
 - User authentication with sessions
 - Create, edit, delete tasks
 - Task status management (To Do, In Progress, Complete)
-- Priority levels (Important, Moderately Important, Not Important)
+- Priority levels (Important, Moderately Important, Low Importance)
 - Optional deadlines with date & time
 - Task descriptions and URLs
 - Drag-and-drop reordering

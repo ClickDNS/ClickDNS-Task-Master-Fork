@@ -11,6 +11,7 @@ let toastTimer = null; // Timer for auto-hiding toast
 const PRIORITY_RANK = {
     'Important': 3,
     'Moderately Important': 2,
+    'Low Importance': 1,
     'Not Important': 1,
     'default': 0
 };
@@ -123,7 +124,7 @@ const AutoRefresh = (() => {
             // Normalise order before comparing so API ordering changes
             // don't trigger a needless re-render.
             const key = t => String(t.id);
-            const sortedFresh   = [...freshTasks].sort((a, b) => key(a).localeCompare(key(b)));
+            const sortedFresh = [...freshTasks].sort((a, b) => key(a).localeCompare(key(b)));
             const sortedCurrent = [...tasks].sort((a, b) => key(a).localeCompare(key(b)));
 
             if (JSON.stringify(sortedFresh) !== JSON.stringify(sortedCurrent)) {
@@ -466,11 +467,11 @@ function renderTasks() {
     const priorityMeta = {
         'Important': { label: 'Important', dotClass: 'priority-dot-important' },
         'Moderately Important': { label: 'Moderately Important', dotClass: 'priority-dot-moderate' },
-        'Not Important': { label: 'Not Important', dotClass: 'priority-dot-low' },
+        'Low Importance': { label: 'Low Importance', dotClass: 'priority-dot-low' },
         'default': { label: 'Other', dotClass: 'priority-dot-default' }
     };
 
-    const priorityOrder = ['Important', 'Moderately Important', 'Not Important', 'default'];
+    const priorityOrder = ['Important', 'Moderately Important', 'Low Importance', 'default'];
     let html = '';
 
     priorityOrder.forEach(priority => {
