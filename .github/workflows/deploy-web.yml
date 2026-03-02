@@ -3,6 +3,8 @@ name: Deploy — Task-Master Web App
 on:
   push:
     branches: [main]
+    paths:
+      - 'web_app/**'
 
 jobs:
   deploy:
