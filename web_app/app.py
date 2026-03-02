@@ -1,5 +1,5 @@
 """
-testdeployTask-Master Web Application
+Task-Master Web Application
 A Flask-based web version of the Task-Master application
 Compatible with CloudFlare Workers deployment
 """
