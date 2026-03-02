@@ -244,7 +244,7 @@ class ConfigureTaskModal(ui.Modal, title="Configure Task"):
         self.status_priority = ui.TextInput(
             label="Status / Priority",
             default=f"{current_status} / {current_priority}",
-            placeholder="To Do / default",
+            placeholder="To Do / default  (importance: Important, Moderately Important, Low Importance)",
             required=False,
             max_length=100,
         )

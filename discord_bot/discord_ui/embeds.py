@@ -32,28 +32,36 @@ def create_task_board_embed(tasks: List[Task], owner: Optional[str] = None, filt
         timestamp=datetime.now()
     )
 
-    # Group by priority
+    # Group by importance
     priority_groups = {
-        "Important": [],
+        "Important":            [],
         "Moderately Important": [],
-        "Not Important": [],
-        "default": []
+        "Low Importance":       [],
+        "default":              [],
     }
 
     for task in filtered_tasks:
-        priority_groups[task.colour].append(task)
+        group = task.colour if task.colour in priority_groups else "default"
+        priority_groups[group].append(task)
 
-    # Add fields for each priority group
+    importance_labels = {
+        "Important":            "High Importance",
+        "Moderately Important": "Medium Importance",
+        "Low Importance":       "Low Importance",
+        "default":              "Default",
+    }
+
+    # Add fields for each importance group
     for priority, group_tasks in priority_groups.items():
         if not group_tasks:
             continue
 
-        priority_label = "Default" if priority == "default" else priority
+        priority_label = importance_labels[priority]
         emoji = {
-            "Important": "🔴",
-            "Moderately Important": "🟡",
-            "Not Important": "🟢",
-            "default": "⚪"
+            "Important":            "🔴",
+            "Moderately Important": "🟠",
+            "Low Importance":       "🔵",
+            "default":              "⚪",
         }.get(priority, "⚪")
 
         field_value = ""
@@ -101,10 +109,10 @@ def create_task_board_embed(tasks: List[Task], owner: Optional[str] = None, filt
 def create_task_detail_embed(task: Task) -> discord.Embed:
     """Create detailed embed for a single task"""
     color_map = {
-        "Important": discord.Color.red(),
+        "Important":            discord.Color.red(),
         "Moderately Important": discord.Color.gold(),
-        "Not Important": discord.Color.green(),
-        "default": discord.Color.greyple()
+        "Low Importance":       discord.Color.blue(),
+        "default":              discord.Color.greyple(),
     }
 
     embed = discord.Embed(
@@ -114,8 +122,17 @@ def create_task_detail_embed(task: Task) -> discord.Embed:
     )
 
     embed.add_field(name="Status", value=task.status, inline=True)
-    embed.add_field(name="Priority", value=task.colour if task.colour !=
-                    "default" else "Default", inline=True)
+    importance_label_map = {
+        "Important":            "High Importance",
+        "Moderately Important": "Medium Importance",
+        "Low Importance":       "Low Importance",
+        "default":              "Default",
+    }
+    embed.add_field(
+        name="Importance",
+        value=importance_label_map.get(task.colour, task.colour),
+        inline=True,
+    )
 
     if task.deadline:
         deadline_display = task.deadline_display

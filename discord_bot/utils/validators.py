@@ -79,20 +79,25 @@ def validate_priority(priority: str) -> str:
     Returns:
         Normalized priority or "default"
     """
-    valid_priorities = ["Important",
-                        "Moderately Important", "Not Important", "default"]
+    valid_priorities = ["Important", "Moderately Important", "Low Importance", "default"]
 
     if not priority or not priority.strip():
         return "default"
 
     priority = priority.strip()
 
+    # Aliases for user-friendly text input (Discord modal) + legacy rename
     aliases = {
-        "critical": "Important",
-        "high": "Important",
-        "medium": "Moderately Important",
-        "low": "Not Important",
-        "normal": "default",
+        # Natural-language shortcuts
+        "high":             "Important",
+        "critical":         "Important",
+        "medium":           "Moderately Important",
+        "moderate":         "Moderately Important",
+        "low":              "Low Importance",
+        "normal":           "default",
+        "none":             "default",
+        # Legacy rename — in case any old value slips through
+        "not important":    "Low Importance",
     }
 
     mapped = aliases.get(priority.lower())
@@ -102,7 +107,7 @@ def validate_priority(priority: str) -> str:
     if priority in valid_priorities:
         return priority
 
-    # Case-insensitive matching
+    # Case-insensitive match against valid values
     for valid in valid_priorities:
         if priority.lower() == valid.lower():
             return valid
