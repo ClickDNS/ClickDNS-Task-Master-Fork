@@ -183,25 +183,42 @@ def main():
         from firebase_admin import credentials
 
         if not firebase_admin._apps:
+            cred = None
+
+            # Try building credentials from env vars first (web_app/.env has all required fields)
             firebase_creds = {
                 "type": "service_account",
-                "project_id":    os.getenv("FIREBASE_PROJECT_ID"),
-                "private_key":   (os.getenv("FIREBASE_PRIVATE_KEY") or "").replace("\\n", "\n"),
-                "client_email":  os.getenv("FIREBASE_CLIENT_EMAIL"),
+                "project_id":           os.getenv("FIREBASE_PROJECT_ID"),
+                "private_key_id":       os.getenv("FIREBASE_PRIVATE_KEY_ID"),
+                "private_key":          (os.getenv("FIREBASE_PRIVATE_KEY") or "").replace("\\n", "\n"),
+                "client_email":         os.getenv("FIREBASE_CLIENT_EMAIL"),
+                "client_id":            os.getenv("FIREBASE_CLIENT_ID"),
+                "auth_uri":             "https://accounts.google.com/o/oauth2/auth",
+                "token_uri":            "https://oauth2.googleapis.com/token",
+                "client_x509_cert_url": os.getenv("FIREBASE_CLIENT_CERT_URL"),
             }
             if all(firebase_creds.values()):
                 cred = credentials.Certificate(firebase_creds)
+                logger.info("Using Firebase credentials from environment variables.")
             else:
+                # Fall back to credentials.json file (must be valid JSON, not a template)
                 for candidate in [
-                    Path(__file__).parent.parent / "discord_bot" / "credentials.json",
                     Path(__file__).parent.parent / "credentials.json",
+                    Path(__file__).parent.parent / "discord_bot" / "credentials.json",
                 ]:
                     if candidate.exists():
-                        cred = credentials.Certificate(str(candidate))
-                        break
-                else:
-                    logger.error("No Firebase credentials found.")
-                    sys.exit(1)
+                        try:
+                            import json as _json
+                            _json.load(open(candidate))  # validate before passing to firebase
+                            cred = credentials.Certificate(str(candidate))
+                            logger.info(f"Using credentials file: {candidate}")
+                            break
+                        except Exception:
+                            logger.warning(f"Skipping invalid credentials file: {candidate}")
+
+            if cred is None:
+                logger.error("No valid Firebase credentials found. Source web_app/.env before running.")
+                sys.exit(1)
             firebase_admin.initialize_app(cred, {"databaseURL": firebase_url})
 
         from firebase_admin import db as firebase_db
