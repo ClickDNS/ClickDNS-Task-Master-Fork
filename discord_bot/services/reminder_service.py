@@ -1,9 +1,9 @@
 """
 Service for checking and sending task deadline reminders
 """
-import discord
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone, date
+import discord
 from config.settings import Settings
 from discord_ui.embeds import create_reminder_embed
 from database.task_model import Task
@@ -53,6 +53,23 @@ class ReminderService:
         except Exception as e:
             logger.error(f"Failed to save reminded tasks: {e}")
 
+    def _prune_reminded_tasks(self, keep_days: int = 30):
+        """Prune old reminder keys to avoid unbounded growth."""
+        cutoff = date.today() - timedelta(days=keep_days)
+        to_remove = set()
+        for key in self.reminded_tasks:
+            for part in key.split(':'):
+                try:
+                    if date.fromisoformat(part) < cutoff:
+                        to_remove.add(key)
+                        break
+                except ValueError:
+                    continue
+        if to_remove:
+            self.reminded_tasks -= to_remove
+            self._save_reminded_tasks()
+            logger.info(f"Pruned {len(to_remove)} old reminder records")
+
     async def check_and_send_reminders(self):
         """Check all tasks for upcoming deadlines and send reminders"""
         if not self._bot:
@@ -73,6 +90,7 @@ class ReminderService:
             return
 
         # Get all tasks using the shared database manager
+        self._prune_reminded_tasks()
         all_tasks = self._db.load_tasks(Settings.TASKMASTER_USERNAME)
 
         for task in all_tasks:
@@ -88,7 +106,11 @@ class ReminderService:
                 continue  # No Discord user mapped for this owner
 
             # Check if deadline is within next 24 hours
-            time_until_deadline = task.deadline_datetime - datetime.now()
+            _now = datetime.now(tz=timezone.utc)
+            deadline_dt = task.deadline_datetime
+            if not deadline_dt:
+                continue
+            time_until_deadline = deadline_dt.astimezone(timezone.utc) - _now
 
             # Create unique reminder key
             reminder_key = f"{task.owner}:{task.id}:{task.deadline}"
@@ -102,7 +124,7 @@ class ReminderService:
                     logger.info(f"Sent reminder for task '{task.name}' to user {discord_user_id}")
             elif time_until_deadline.total_seconds() < 0:
                 # Task is overdue, send overdue notification (once per day)
-                overdue_key = f"{reminder_key}:overdue:{datetime.now().date()}"
+                overdue_key = f"{reminder_key}:overdue:{_now.date()}"
                 if overdue_key not in self.reminded_tasks:
                     await self._send_overdue_notification(reminder_channel, task, discord_user_id)
                     self.reminded_tasks.add(overdue_key)

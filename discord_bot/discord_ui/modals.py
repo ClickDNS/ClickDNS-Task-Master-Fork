@@ -15,7 +15,7 @@ from utils.validators import (
     format_deadline_for_display,
 )
 from config.settings import Settings
-from services.paste_service import offload_description, is_paste_url, DESCRIPTION_PASTE_THRESHOLD
+from services.paste_service import async_offload_description, is_paste_url, DESCRIPTION_PASTE_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +45,8 @@ async def _auto_delete(msg, delay: float):
     await asyncio.sleep(delay)
     try:
         await msg.delete()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Failed to auto-delete ephemeral modal message: %s", e)
 
 
 async def _send_ephemeral_reply(interaction: discord.Interaction, content: str):
@@ -214,7 +214,8 @@ class CreateTaskModal(ui.Modal, title="Create Task"):
 
             await _send_ephemeral_reply(interaction, f"✅ Task '**{name}**' created successfully!")
         except Exception as e:
-            await _send_ephemeral_reply(interaction, f"❌ Error creating task: {str(e)}")
+            logger.error("CreateTaskModal submit failed: %s", e, exc_info=True)
+            await _send_ephemeral_reply(interaction, "❌ Something went wrong. Please try again or contact an admin.")
 
 
 class ConfigureTaskModal(ui.Modal, title="Configure Task"):
@@ -339,7 +340,7 @@ class ConfigureTaskModal(ui.Modal, title="Configure Task"):
         if self._description_was_paste and description_raw.strip() == _PASTE_PLACEHOLDER:
             description = self._current_description  # keep existing paste URL
         else:
-            description = offload_description(description_raw, title=f"{self.task_name} — Description")
+            description = await async_offload_description(description_raw, title=f"{self.task_name} — Description")
 
         if not await _defer_ephemeral(interaction):
             return
@@ -393,7 +394,8 @@ class ConfigureTaskModal(ui.Modal, title="Configure Task"):
 
             await _send_ephemeral_reply(interaction, "✅ Task configuration updated.")
         except Exception as e:
-            await _send_ephemeral_reply(interaction, f"❌ Error updating task: {str(e)}")
+            logger.error("ConfigureTaskModal submit failed: %s", e, exc_info=True)
+            await _send_ephemeral_reply(interaction, "❌ Something went wrong. Please try again or contact an admin.")
 
 
 class AddSubtaskModal(ui.Modal, title="Add Sub-task"):
@@ -490,7 +492,8 @@ class AddSubtaskModal(ui.Modal, title="Add Sub-task"):
                 f"✅ Sub-task '{self.subtask_name.value}' added successfully!",
             )
         except Exception as e:
-            await _send_ephemeral_reply(interaction, f"❌ Error adding sub-task: {str(e)}")
+            logger.error("AddSubtaskModal submit failed: %s", e, exc_info=True)
+            await _send_ephemeral_reply(interaction, "❌ Something went wrong. Please try again or contact an admin.")
 
 
 class ConfigureSubtaskModal(ui.Modal):
@@ -568,7 +571,7 @@ class ConfigureSubtaskModal(ui.Modal):
         if self._subtask_desc_was_paste and description_raw == _PASTE_PLACEHOLDER:
             description = self._existing_subtask_desc  # preserve existing paste URL
         else:
-            description = offload_description(description_raw, title=f"Subtask #{self.subtask_id} — Description")
+            description = await async_offload_description(description_raw, title=f"Subtask #{self.subtask_id} — Description")
 
         if not await _defer_ephemeral(interaction):
             return
@@ -625,4 +628,5 @@ class ConfigureSubtaskModal(ui.Modal):
             action = "updated" if self._is_editing else "created"
             await _send_ephemeral_reply(interaction, f"✅ Sub-task #{self.subtask_id} {action} successfully.")
         except Exception as e:
-            await _send_ephemeral_reply(interaction, f"❌ Error saving sub-task: {str(e)}")
+            logger.error("ConfigureSubtaskModal submit failed: %s", e, exc_info=True)
+            await _send_ephemeral_reply(interaction, "❌ Something went wrong. Please try again or contact an admin.")

@@ -56,7 +56,7 @@ class DashboardService:
         from services.task_service import TaskService
         from discord_ui.buttons import DashboardView
         task_service = TaskService()
-        tasks = task_service.get_all_tasks()
+        tasks = await task_service.get_all_tasks()
 
         status_counts = {"To Do": 0, "In Progress": 0, "Complete": 0}
         for task in tasks:

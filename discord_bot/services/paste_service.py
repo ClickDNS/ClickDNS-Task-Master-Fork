@@ -10,6 +10,7 @@ import logging
 import os
 import socket
 import time
+import asyncio
 from typing import Optional
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -20,8 +21,7 @@ logger = logging.getLogger(__name__)
 # Descriptions longer than this are offloaded to koda-paste.
 DESCRIPTION_PASTE_THRESHOLD = 500
 
-_PASTE_URL = os.environ.get(
-    "KODA_PASTE_URL", "https://koda-vps.tail9ac53b.ts.net:8844")
+_PASTE_URL = os.environ.get("KODA_PASTE_URL", "").rstrip("/")
 _PASTE_RETRY_AFTER = 0.0
 _PASTE_DNS_BACKOFF_SECONDS = 300
 _PASTE_FAILURE_BACKOFF_SECONDS = 120
@@ -43,6 +43,10 @@ def upload_to_paste(content: str, title: str = "Paste") -> Optional[str]:
 
     now = time.time()
     if now < _PASTE_RETRY_AFTER:
+        return None
+    if not _PASTE_URL:
+        logger.warning("KODA_PASTE_URL not configured — paste upload disabled")
+        _PASTE_RETRY_AFTER = now + _PASTE_FAILURE_BACKOFF_SECONDS
         return None
 
     parsed_url = urlparse(_PASTE_URL)
@@ -103,3 +107,13 @@ def offload_description(description: str, title: str = "Description") -> str:
     # Paste unavailable — return as-is (best effort)
     logger.warning("koda-paste unavailable; storing description inline (may exceed limits)")
     return description
+
+
+async def async_upload_to_paste(content: str, title: str = "Paste") -> Optional[str]:
+    """Async wrapper for upload_to_paste to avoid blocking the event loop."""
+    return await asyncio.to_thread(upload_to_paste, content, title)
+
+
+async def async_offload_description(description: str, title: str = "Description") -> str:
+    """Async wrapper for offload_description to avoid blocking the event loop."""
+    return await asyncio.to_thread(offload_description, description, title)

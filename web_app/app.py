@@ -4,18 +4,27 @@ A Flask-based web version of the Task-Master application
 Compatible with CloudFlare Workers deployment
 """
 
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for, abort
 import logging
 import os
 import json
 import socket
 import uuid
+import secrets
+import hashlib
+import threading
 from datetime import datetime, timezone
 from functools import wraps
 from typing import Any
 from urllib.parse import urlparse as _urlparse
+from logging.handlers import RotatingFileHandler
 from dotenv import load_dotenv
 import requests as _requests
+from flask_wtf.csrf import CSRFProtect
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from flask_cors import CORS
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Try to import firebase_admin (optional)
 firebase_admin: Any = None
@@ -34,8 +43,7 @@ load_dotenv()
 # ── koda-paste integration ────────────────────────────────────────────────────
 # The web app uses koda-paste to store and retrieve long task/subtask descriptions.
 # KODA_PASTE_URL should point to the plain-HTTP API port (default: 8845).
-_PASTE_BASE = os.environ.get(
-    "KODA_PASTE_URL", "http://100.123.59.91:8845").rstrip("/")
+_PASTE_BASE = os.environ.get("KODA_PASTE_URL", "").rstrip("/")
 _DESCRIPTION_PASTE_THRESHOLD = int(
     os.environ.get("KODA_PASTE_THRESHOLD", "500"))
 
@@ -51,13 +59,9 @@ if _PASTE_PROXY:
 
 def _is_paste_url(value: str) -> bool:
     """Return True if value looks like a koda-paste share URL."""
-    if not value:
+    if not value or not _PASTE_BASE:
         return False
-    # Match any host variant (IP or Tailscale hostname) with a /p/<id> path
-    return "/p/" in value and (
-        "100.123.59.91" in value
-        or "tail9ac53b.ts.net" in value
-    )
+    return value.startswith(_PASTE_BASE + "/p/")
 
 
 def _resolve_description(desc: str) -> str:
@@ -103,15 +107,43 @@ def _offload_description(desc: str, title: str = "Description") -> str:
 
 
 app = Flask(__name__)
-app.secret_key = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
-app.config['SESSION_TYPE'] = 'filesystem'
+_secret_key = os.getenv('SECRET_KEY', '').strip()
+if not _secret_key:
+    raise RuntimeError(
+        'SECRET_KEY environment variable is required. '
+        'Generate with: python3 -c "import secrets; print(secrets.token_hex(32))"'
+    )
+app.secret_key = _secret_key
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_NAME='tmid',
+    PERMANENT_SESSION_LIFETIME=3600,
+)
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+_log_level = getattr(logging, os.getenv('LOG_LEVEL', 'INFO').upper(), logging.INFO)
+_log_path = os.getenv('LOG_FILE', '/tmp/task-master.log')
+_max_bytes = int(os.getenv('LOG_MAX_BYTES', str(10 * 1024 * 1024)))
+_backup_count = int(os.getenv('LOG_BACKUP_COUNT', '5'))
+logging.basicConfig(
+    level=_log_level,
+    format='%(asctime)s %(name)s %(levelname)s %(message)s',
+    handlers=[
+        RotatingFileHandler(_log_path, maxBytes=_max_bytes, backupCount=_backup_count),
+        logging.StreamHandler(),
+    ],
+)
 logger = logging.getLogger(__name__)
 
 # Single-user mode - if set, username is fixed and no login required
 SINGLE_USER_MODE = os.getenv('TASKMASTER_USERNAME')
+APP_PASSWORD = os.getenv('APP_PASSWORD', '')
+if not APP_PASSWORD and not SINGLE_USER_MODE:
+    raise RuntimeError(
+        "APP_PASSWORD must be set in .env (or set TASKMASTER_USERNAME for single-user mode)"
+    )
 
 # Carbon API key – allows external API access from the Carbon dashboard
 CARBON_API_KEY = os.getenv('CARBON_API_KEY')
@@ -122,6 +154,32 @@ ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '').split(
 ALLOWED_HOSTS = [host.strip()
                  # Clean up whitespace
                  for host in ALLOWED_HOSTS if host.strip()]
+
+# Securely trust only configured proxy hops
+_proxy_count = int(os.getenv('TRUSTED_PROXY_COUNT', '1'))
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=_proxy_count, x_proto=_proxy_count)
+
+# Optional CORS support for configured origins
+_cors_origins = [o.strip() for o in os.getenv('CORS_ORIGINS', '').split(',') if o.strip()]
+if _cors_origins:
+    CORS(app, origins=_cors_origins, supports_credentials=True)
+
+# CSRF and rate limiting
+csrf = CSRFProtect(app)
+LOGIN_RATE_LIMIT = int(os.getenv('LOGIN_RATE_LIMIT', '5'))
+API_RATE_LIMIT = int(os.getenv('API_RATE_LIMIT', '60'))
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=[f"{API_RATE_LIMIT} per minute"],
+    storage_uri="memory://",
+)
+
+MAX_TASK_NAME = 200
+MAX_DESCRIPTION = 10000
+MAX_URL = 2000
+MAX_OWNER = 100
+_tasks_lock = threading.Lock()
 
 # Firebase configuration
 FIREBASE_DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL")
@@ -152,9 +210,11 @@ if FIREBASE_AVAILABLE and FIREBASE_DATABASE_URL:
             logger.info(
                 "Initialized Firebase backend from environment variables")
         else:
-            # Fallback to credentials.json file
-            cred_path = os.path.join(os.path.dirname(
-                __file__), "..", "credentials.json")
+            # Fallback to explicit credentials path
+            cred_path = os.getenv(
+                "FIREBASE_CREDENTIALS_PATH",
+                os.path.join(os.path.dirname(__file__), "..", "credentials.json"),
+            )
             if os.path.isfile(cred_path):
                 cred = credentials.Certificate(cred_path)
                 firebase_admin.initialize_app(
@@ -267,10 +327,7 @@ def check_ip_whitelist():
         return True  # No whitelist configured, allow all
 
     # Get the client IP address
-    client_ip_raw = request.headers.get('X-Forwarded-For', request.remote_addr)
-    if client_ip_raw:
-        # X-Forwarded-For can contain multiple IPs, take the first one
-        client_ip_raw = client_ip_raw.split(',')[0].strip()
+    client_ip_raw = request.remote_addr
 
     client_ip_obj = _parse_ip(client_ip_raw)
 
@@ -313,7 +370,7 @@ def ip_whitelist_check():
     # Exempt valid Carbon API key requests from IP whitelist
     auth_header = request.headers.get('Authorization', '')
     if CARBON_API_KEY and auth_header.startswith('Bearer '):
-        if auth_header[7:] == CARBON_API_KEY:
+        if secrets.compare_digest(auth_header[7:].encode(), CARBON_API_KEY.encode()):
             return None  # Allow through — auth is handled by login_required
 
     if not check_ip_whitelist():
@@ -328,7 +385,7 @@ def login_required(f):
         auth_header = request.headers.get('Authorization', '')
         if CARBON_API_KEY and auth_header.startswith('Bearer '):
             token = auth_header[7:]
-            if token == CARBON_API_KEY:
+            if secrets.compare_digest(token.encode(), CARBON_API_KEY.encode()):
                 # API key valid — use TASKMASTER_USERNAME or 'carbon' as the identity
                 session['username'] = SINGLE_USER_MODE or 'carbon'
                 return f(*args, **kwargs)
@@ -342,6 +399,74 @@ def login_required(f):
             return redirect(url_for('login'))
         return f(*args, **kwargs)
     return decorated_function
+
+
+def _check_password(candidate: str) -> bool:
+    if not APP_PASSWORD:
+        return False
+    return secrets.compare_digest(
+        hashlib.sha256(candidate.encode()).hexdigest(),
+        hashlib.sha256(APP_PASSWORD.encode()).hexdigest(),
+    )
+
+
+def require_json():
+    data = request.get_json(silent=True)
+    if data is None:
+        abort(400, description="Request body must be valid JSON with Content-Type: application/json")
+    return data
+
+
+def validate_task_url(url: str) -> bool:
+    if not url:
+        return True
+    try:
+        parsed = _urlparse(url)
+        return parsed.scheme in ('http', 'https')
+    except Exception:
+        return False
+
+
+def _validate_task_payload(data):
+    name = (data.get('name') or '').strip()
+    description = (data.get('description') or '').strip()
+    task_url = (data.get('url') or '').strip()
+    owner = (data.get('owner') or '').strip()
+
+    if not name:
+        return "Task name is required"
+    if len(name) > MAX_TASK_NAME:
+        return f"Task name must be ≤ {MAX_TASK_NAME} chars"
+    if len(description) > MAX_DESCRIPTION:
+        return f"Description must be ≤ {MAX_DESCRIPTION} chars"
+    if len(task_url) > MAX_URL:
+        return f"URL must be ≤ {MAX_URL} chars"
+    if len(owner) > MAX_OWNER:
+        return f"Owner must be ≤ {MAX_OWNER} chars"
+    if not validate_task_url(task_url):
+        return "URL must use http or https scheme"
+    return None
+
+
+@app.after_request
+def set_security_headers(response):
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'none'; "
+        "form-action 'self';"
+    )
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+    if request.is_secure or request.headers.get('X-Forwarded-Proto') == 'https':
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    return response
 
 
 def get_local_file_path(username):
@@ -541,20 +666,24 @@ def favicon():
 
 
 @app.route('/login', methods=['GET', 'POST'])
+@limiter.limit(f"{LOGIN_RATE_LIMIT} per minute")
 def login():
     """Login page"""
     # If in single-user mode, skip login and go straight to tasks
     if SINGLE_USER_MODE:
         session['username'] = SINGLE_USER_MODE
         return redirect(url_for('tasks'))
+    if 'username' in session:
+        return redirect(url_for('tasks'))
 
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
-        if username:
+        password = request.form.get('password', '')
+        if username and _check_password(password):
             session['username'] = username
             logger.info(f"User logged in: {username}")
             return redirect(url_for('tasks'))
-        return render_template('login.html', error="Please enter a username")
+        return render_template('login.html', error="Invalid credentials")
     return render_template('login.html')
 
 
@@ -579,6 +708,7 @@ def tasks():
 
 
 @app.route('/api/tasks', methods=['GET'])
+@csrf.exempt
 @login_required
 def get_tasks():
     """API endpoint to get all tasks. Descriptions are returned as-is (paste URLs not resolved).
@@ -596,11 +726,12 @@ def get_tasks():
                     st.get('description', ''))
         return jsonify({'success': True, 'tasks': task_list})
     except Exception as e:
-        logger.error(f"Error loading tasks: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        logger.error(f"Error loading tasks: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
 @app.route('/api/tasks/<task_id>', methods=['GET'])
+@csrf.exempt
 @login_required
 def get_task(task_id):
     """Return a single task with description (and subtask descriptions) resolved from koda-paste."""
@@ -624,36 +755,43 @@ def get_task(task_id):
                 return jsonify({'success': True, 'task': t})
         return jsonify({'success': False, 'error': 'Task not found'}), 404
     except Exception as e:
-        logger.error(f"Error fetching task {task_id}: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        logger.error(f"Error fetching task {task_id}: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
 @app.route('/api/tasks', methods=['POST'])
+@csrf.exempt
+@limiter.limit(f"{API_RATE_LIMIT} per minute")
 @login_required
 def create_task():
     """API endpoint to create a new task"""
     username = session.get('username')
     try:
-        data = request.get_json()
-        tasks = load_tasks(username)
+        data = require_json()
+        validation_error = _validate_task_payload(data)
+        if validation_error:
+            return jsonify({'success': False, 'error': validation_error}), 400
 
         # Create new task
+        new_task_id = str(uuid.uuid4())
         new_task = {
-            'id': data['name'],
+            'id': new_task_id,
             'uuid': str(uuid.uuid4()),
-            'name': data['name'],
+            'name': data['name'].strip(),
             'deadline': data.get('deadline'),
             'status': data.get('status', 'To Do'),
-            'order': len(tasks),
             'description': _offload_description(data.get('description', ''), title=f"{data['name']} — Description"),
-            'url': data.get('url', ''),
-            'owner': data.get('owner', ''),
+            'url': data.get('url', '').strip(),
+            'owner': data.get('owner', '').strip(),
             'colour': normalize_priority(data.get('colour', 'default')),
             'subtasks': normalize_subtasks(data.get('subtasks', [])),
         }
 
-        tasks.append(new_task)
-        save_tasks(username, tasks)
+        with _tasks_lock:
+            tasks = load_tasks(username)
+            new_task['order'] = len(tasks)
+            tasks.append(new_task)
+            save_tasks(username, tasks)
 
         # Emit task_created log event
         append_log_event(username, {
@@ -672,18 +810,22 @@ def create_task():
 
         return jsonify({'success': True, 'task': new_task})
     except Exception as e:
-        logger.error(f"Error creating task: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        logger.error(f"Error creating task: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
 @app.route('/api/tasks/<task_id>', methods=['PUT'])
+@csrf.exempt
+@limiter.limit(f"{API_RATE_LIMIT} per minute")
 @login_required
 def update_task(task_id):
     """API endpoint to update a task"""
     username = session.get('username')
     try:
-        data = request.get_json()
-        tasks = load_tasks(username)
+        data = require_json()
+        validation_error = _validate_task_payload(data)
+        if validation_error:
+            return jsonify({'success': False, 'error': validation_error}), 400
 
         # Find and update task, capturing before state for logging
         task_name_for_log = task_id
@@ -693,8 +835,13 @@ def update_task(task_id):
         after_snapshot = {}
         after_subtasks = []
 
-        for task in tasks:
-            if task['id'] == task_id:
+        task_found = False
+        with _tasks_lock:
+            tasks = load_tasks(username)
+            for task in tasks:
+                if task['id'] != task_id:
+                    continue
+                task_found = True
                 # Capture before state
                 task_name_for_log = task.get('name', task_id)
                 task_uuid_for_log = task.get('uuid', '')
@@ -738,8 +885,9 @@ def update_task(task_id):
                 }
                 after_subtasks = normalize_subtasks(task.get('subtasks', []))
                 break
-
-        save_tasks(username, tasks)
+            if not task_found:
+                return jsonify({'success': False, 'error': f'Task {task_id} not found'}), 404
+            save_tasks(username, tasks)
 
         # Emit task_updated event if any tracked fields changed
         changed_before = {}
@@ -819,11 +967,13 @@ def update_task(task_id):
 
         return jsonify({'success': True})
     except Exception as e:
-        logger.error(f"Error updating task: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        logger.error(f"Error updating task: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
 @app.route('/api/tasks/<task_id>', methods=['DELETE'])
+@csrf.exempt
+@limiter.limit(f"{API_RATE_LIMIT} per minute")
 @login_required
 def remove_task(task_id):
     """API endpoint to delete a task"""
@@ -839,7 +989,8 @@ def remove_task(task_id):
                 deleted_task_uuid = t.get('uuid', '')
                 break
 
-        delete_task(username, task_id)
+        with _tasks_lock:
+            delete_task(username, task_id)
 
         # Emit task_deleted log event
         append_log_event(username, {
@@ -850,51 +1001,52 @@ def remove_task(task_id):
 
         return jsonify({'success': True})
     except Exception as e:
-        logger.error(f"Error deleting task: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        logger.error(f"Error deleting task: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
 @app.route('/api/tasks/<task_id>/subtasks', methods=['POST'])
+@csrf.exempt
+@limiter.limit(f"{API_RATE_LIMIT} per minute")
 @login_required
 def add_subtask(task_id):
     """API endpoint to add a new subtask to a task"""
     username = session.get('username')
     try:
-        data = request.get_json() or {}
+        data = require_json()
         name = (data.get('name') or '').strip()
         if not name:
             return jsonify({'success': False, 'error': 'Subtask name is required'}), 400
+        if len(name) > MAX_TASK_NAME:
+            return jsonify({'success': False, 'error': f'Subtask name must be ≤ {MAX_TASK_NAME} chars'}), 400
+        if not validate_task_url((data.get('url') or '').strip()):
+            return jsonify({'success': False, 'error': 'URL must use http or https scheme'}), 400
 
-        tasks = load_tasks(username)
+        with _tasks_lock:
+            tasks = load_tasks(username)
+            target_task = None
+            for task in tasks:
+                if task['id'] == task_id:
+                    target_task = task
+                    break
+            if target_task is None:
+                return jsonify({'success': False, 'error': f'Task not found: {task_id}'}), 404
 
-        # Find the task
-        target_task = None
-        for task in tasks:
-            if task['id'] == task_id:
-                target_task = task
-                break
-        if target_task is None:
-            return jsonify({'success': False, 'error': f'Task not found: {task_id}'}), 404
-
-        # Assign a new unique subtask id (max existing id + 1)
-        existing_subtasks = normalize_subtasks(target_task.get('subtasks', []))
-        next_id = max((st['id'] for st in existing_subtasks), default=0) + 1
-
-        new_subtask = {
-            'id': next_id,
-            'name': name,
-            'description': _offload_description(
-                (data.get('description') or '').strip(),
-                title=f"{target_task.get('name', task_id)} — Subtask #{next_id}",
-            ),
-            'url': (data.get('url') or '').strip(),
-            'completed': False,
-        }
-
-        existing_subtasks.append(new_subtask)
-        target_task['subtasks'] = normalize_subtasks(existing_subtasks)
-
-        save_tasks(username, tasks)
+            existing_subtasks = normalize_subtasks(target_task.get('subtasks', []))
+            next_id = max((st['id'] for st in existing_subtasks), default=0) + 1
+            new_subtask = {
+                'id': next_id,
+                'name': name,
+                'description': _offload_description(
+                    (data.get('description') or '').strip(),
+                    title=f"{target_task.get('name', task_id)} — Subtask #{next_id}",
+                ),
+                'url': (data.get('url') or '').strip(),
+                'completed': False,
+            }
+            existing_subtasks.append(new_subtask)
+            target_task['subtasks'] = normalize_subtasks(existing_subtasks)
+            save_tasks(username, tasks)
 
         append_log_event(username, {
             "event_type": "subtask_added",
@@ -906,59 +1058,61 @@ def add_subtask(task_id):
 
         return jsonify({'success': True, 'subtask': new_subtask})
     except Exception as e:
-        logger.error(f"Error adding subtask to task {task_id}: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        logger.error(f"Error adding subtask to task {task_id}: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
 @app.route('/api/tasks/<task_id>/subtasks/<int:subtask_id>', methods=['PUT'])
+@csrf.exempt
+@limiter.limit(f"{API_RATE_LIMIT} per minute")
 @login_required
 def edit_subtask(task_id, subtask_id):
     """API endpoint to edit a subtask (name, description, url)"""
     username = session.get('username')
     try:
-        data = request.get_json() or {}
-        tasks = load_tasks(username)
+        data = require_json()
+        if 'url' in data and not validate_task_url((data.get('url') or '').strip()):
+            return jsonify({'success': False, 'error': 'URL must use http or https scheme'}), 400
+        if 'name' in data and len((data.get('name') or '').strip()) > MAX_TASK_NAME:
+            return jsonify({'success': False, 'error': f'Subtask name must be ≤ {MAX_TASK_NAME} chars'}), 400
 
-        # Find the task
-        target_task = None
-        for task in tasks:
-            if task['id'] == task_id:
-                target_task = task
-                break
-        if target_task is None:
-            return jsonify({'success': False, 'error': f'Task not found: {task_id}'}), 404
+        with _tasks_lock:
+            tasks = load_tasks(username)
+            target_task = None
+            for task in tasks:
+                if task['id'] == task_id:
+                    target_task = task
+                    break
+            if target_task is None:
+                return jsonify({'success': False, 'error': f'Task not found: {task_id}'}), 404
 
-        # Find the subtask
-        subtasks = normalize_subtasks(target_task.get('subtasks', []))
-        target_subtask = None
-        for st in subtasks:
-            if st['id'] == subtask_id:
-                target_subtask = st
-                break
-        if target_subtask is None:
-            return jsonify({'success': False, 'error': f'Subtask not found: {subtask_id}'}), 404
+            subtasks = normalize_subtasks(target_task.get('subtasks', []))
+            target_subtask = None
+            for st in subtasks:
+                if st['id'] == subtask_id:
+                    target_subtask = st
+                    break
+            if target_subtask is None:
+                return jsonify({'success': False, 'error': f'Subtask not found: {subtask_id}'}), 404
 
-        # Capture before state for logging (only edited fields)
-        edit_before = {}
-        edit_after = {}
+            edit_before = {}
+            edit_after = {}
+            for field in ('name', 'description', 'url'):
+                if field in data:
+                    new_val = (data[field] or '').strip()
+                    if field == 'description':
+                        new_val = _offload_description(
+                            new_val,
+                            title=f"{target_task.get('name', task_id)} — Subtask #{subtask_id}",
+                        )
+                    old_val = target_subtask.get(field, '')
+                    if old_val != new_val:
+                        edit_before[field] = old_val
+                        edit_after[field] = new_val
+                    target_subtask[field] = new_val
 
-        # Only update provided fields; offload description to koda-paste if too long
-        for field in ('name', 'description', 'url'):
-            if field in data:
-                new_val = (data[field] or '').strip()
-                if field == 'description':
-                    new_val = _offload_description(
-                        new_val,
-                        title=f"{target_task.get('name', task_id)} — Subtask #{subtask_id}",
-                    )
-                old_val = target_subtask.get(field, '')
-                if old_val != new_val:
-                    edit_before[field] = old_val
-                    edit_after[field] = new_val
-                target_subtask[field] = new_val
-
-        target_task['subtasks'] = normalize_subtasks(subtasks)
-        save_tasks(username, tasks)
+            target_task['subtasks'] = normalize_subtasks(subtasks)
+            save_tasks(username, tasks)
 
         if edit_before:
             append_log_event(username, {
@@ -973,42 +1127,42 @@ def edit_subtask(task_id, subtask_id):
         return jsonify({'success': True, 'subtask': target_subtask})
     except Exception as e:
         logger.error(
-            f"Error editing subtask {subtask_id} of task {task_id}: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+            f"Error editing subtask {subtask_id} of task {task_id}: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
 @app.route('/api/tasks/<task_id>/subtasks/<int:subtask_id>', methods=['DELETE'])
+@csrf.exempt
+@limiter.limit(f"{API_RATE_LIMIT} per minute")
 @login_required
 def delete_subtask(task_id, subtask_id):
     """API endpoint to delete a subtask"""
     username = session.get('username')
     try:
-        tasks = load_tasks(username)
+        with _tasks_lock:
+            tasks = load_tasks(username)
+            target_task = None
+            for task in tasks:
+                if task['id'] == task_id:
+                    target_task = task
+                    break
+            if target_task is None:
+                return jsonify({'success': False, 'error': f'Task not found: {task_id}'}), 404
 
-        # Find the task
-        target_task = None
-        for task in tasks:
-            if task['id'] == task_id:
-                target_task = task
-                break
-        if target_task is None:
-            return jsonify({'success': False, 'error': f'Task not found: {task_id}'}), 404
+            subtasks = normalize_subtasks(target_task.get('subtasks', []))
+            deleted_subtask = None
+            remaining = []
+            for st in subtasks:
+                if st['id'] == subtask_id:
+                    deleted_subtask = st
+                else:
+                    remaining.append(st)
 
-        # Find the subtask
-        subtasks = normalize_subtasks(target_task.get('subtasks', []))
-        deleted_subtask = None
-        remaining = []
-        for st in subtasks:
-            if st['id'] == subtask_id:
-                deleted_subtask = st
-            else:
-                remaining.append(st)
+            if deleted_subtask is None:
+                return jsonify({'success': False, 'error': f'Subtask not found: {subtask_id}'}), 404
 
-        if deleted_subtask is None:
-            return jsonify({'success': False, 'error': f'Subtask not found: {subtask_id}'}), 404
-
-        target_task['subtasks'] = normalize_subtasks(remaining)
-        save_tasks(username, tasks)
+            target_task['subtasks'] = normalize_subtasks(remaining)
+            save_tasks(username, tasks)
 
         append_log_event(username, {
             "event_type": "subtask_deleted",
@@ -1021,42 +1175,40 @@ def delete_subtask(task_id, subtask_id):
         return jsonify({'success': True, 'subtask': deleted_subtask})
     except Exception as e:
         logger.error(
-            f"Error deleting subtask {subtask_id} of task {task_id}: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+            f"Error deleting subtask {subtask_id} of task {task_id}: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
 @app.route('/api/tasks/<task_id>/subtasks/<int:subtask_id>/toggle', methods=['PATCH'])
+@csrf.exempt
+@limiter.limit(f"{API_RATE_LIMIT} per minute")
 @login_required
 def toggle_subtask(task_id, subtask_id):
     """API endpoint to toggle a subtask's completed status"""
     username = session.get('username')
     try:
-        tasks = load_tasks(username)
+        with _tasks_lock:
+            tasks = load_tasks(username)
+            target_task = None
+            for task in tasks:
+                if task['id'] == task_id:
+                    target_task = task
+                    break
+            if target_task is None:
+                return jsonify({'success': False, 'error': f'Task not found: {task_id}'}), 404
 
-        # Find the task
-        target_task = None
-        for task in tasks:
-            if task['id'] == task_id:
-                target_task = task
-                break
-        if target_task is None:
-            return jsonify({'success': False, 'error': f'Task not found: {task_id}'}), 404
+            subtasks = normalize_subtasks(target_task.get('subtasks', []))
+            target_subtask = None
+            for st in subtasks:
+                if st['id'] == subtask_id:
+                    target_subtask = st
+                    break
+            if target_subtask is None:
+                return jsonify({'success': False, 'error': f'Subtask not found: {subtask_id}'}), 404
 
-        # Find the subtask
-        subtasks = normalize_subtasks(target_task.get('subtasks', []))
-        target_subtask = None
-        for st in subtasks:
-            if st['id'] == subtask_id:
-                target_subtask = st
-                break
-        if target_subtask is None:
-            return jsonify({'success': False, 'error': f'Subtask not found: {subtask_id}'}), 404
-
-        # Toggle
-        target_subtask['completed'] = not target_subtask.get(
-            'completed', False)
-        target_task['subtasks'] = normalize_subtasks(subtasks)
-        save_tasks(username, tasks)
+            target_subtask['completed'] = not target_subtask.get('completed', False)
+            target_task['subtasks'] = normalize_subtasks(subtasks)
+            save_tasks(username, tasks)
 
         append_log_event(username, {
             "event_type": "subtask_toggled",
@@ -1072,66 +1224,59 @@ def toggle_subtask(task_id, subtask_id):
         return jsonify({'success': True, 'subtask': target_subtask})
     except Exception as e:
         logger.error(
-            f"Error toggling subtask {subtask_id} of task {task_id}: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+            f"Error toggling subtask {subtask_id} of task {task_id}: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
 @app.route('/api/tasks/reorder', methods=['POST'])
+@csrf.exempt
+@limiter.limit(f"{API_RATE_LIMIT} per minute")
 @login_required
 def reorder_tasks():
     """API endpoint to reorder tasks"""
     username = session.get('username')
     try:
-        data = request.get_json()
+        data = require_json()
         task_ids = data.get('task_ids', [])
         if not task_ids:
             return jsonify({'success': False, 'error': 'No task_ids provided'}), 400
 
-        tasks = load_tasks(username)
+        with _tasks_lock:
+            tasks = load_tasks(username)
+            task_map = {task['id']: task for task in tasks}
+            for tid in task_ids:
+                if tid not in task_map:
+                    return jsonify({'success': False, 'error': f'Task id not found: {tid}'}), 400
 
-        # Map and validate provided ids
-        task_map = {task['id']: task for task in tasks}
-        for tid in task_ids:
-            if tid not in task_map:
-                return jsonify({'success': False, 'error': f'Task id not found: {tid}'}), 400
+            group_colour = normalize_priority(task_map[task_ids[0]].get('colour', 'default'))
+            for tid in task_ids:
+                if normalize_priority(task_map[tid].get('colour', 'default')) != group_colour:
+                    return jsonify({'success': False, 'error': 'Reorder must be within a single priority group'}), 400
 
-        # All provided tasks must belong to the same priority (colour)
-        group_colour = normalize_priority(
-            task_map[task_ids[0]].get('colour', 'default'))
-        for tid in task_ids:
-            if normalize_priority(task_map[tid].get('colour', 'default')) != group_colour:
-                return jsonify({'success': False, 'error': 'Reorder must be within a single priority group'}), 400
+            provided_set = set(task_ids)
+            group_task_ids = [t['id'] for t in tasks if normalize_priority(t.get('colour', 'default')) == group_colour]
+            if not provided_set.issubset(set(group_task_ids)):
+                return jsonify({'success': False, 'error': 'Invalid task ids for priority group'}), 400
 
-        provided_set = set(task_ids)
+            new_order_iter = iter(task_ids)
+            new_tasks = []
+            for t in tasks:
+                if normalize_priority(t.get('colour', 'default')) == group_colour and t['id'] in provided_set:
+                    next_id = next(new_order_iter)
+                    new_tasks.append(task_map[next_id])
+                else:
+                    new_tasks.append(t)
 
-        # Ensure provided ids are a subset of the tasks that have the same colour
-        group_task_ids = [t['id'] for t in tasks if normalize_priority(t.get(
-            'colour', 'default')) == group_colour]
-        if not provided_set.issubset(set(group_task_ids)):
-            return jsonify({'success': False, 'error': 'Invalid task ids for priority group'}), 400
+            for idx, t in enumerate(new_tasks):
+                t['order'] = idx
 
-        # Build new tasks list by replacing occurrences of the group's tasks with the new ordering
-        new_order_iter = iter(task_ids)
-        new_tasks = []
-        for t in tasks:
-            if normalize_priority(t.get('colour', 'default')) == group_colour and t['id'] in provided_set:
-                # take the next id from the provided ordering
-                next_id = next(new_order_iter)
-                new_tasks.append(task_map[next_id])
-            else:
-                new_tasks.append(t)
-
-        # Reassign order indexes
-        for idx, t in enumerate(new_tasks):
-            t['order'] = idx
-
-        save_tasks(username, new_tasks)
+            save_tasks(username, new_tasks)
         return jsonify({'success': True})
     except Exception as e:
-        logger.error(f"Error reordering tasks: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        logger.error(f"Error reordering tasks: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
 if __name__ == '__main__':
     # For local development
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=False, host='0.0.0.0', port=5000)

@@ -16,8 +16,8 @@ async def _auto_delete(msg, delay: float):
     await asyncio.sleep(delay)
     try:
         await msg.delete()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Failed to auto-delete ephemeral button message: %s", e)
 
 
 class ConfirmationButtons(View):
@@ -252,9 +252,10 @@ class SubtaskActionView(discord.ui.View):
         except ValueError as e:
             await self._safe_edit_message(interaction, content=f"❌ {str(e)}", view=None)
         except Exception as e:
+            logger.error("Failed toggling sub-task #%s: %s", self.subtask_id, e, exc_info=True)
             await self._safe_edit_message(
                 interaction,
-                content=f"❌ Error toggling sub-task: {str(e)}",
+                content="❌ Something went wrong. Please try again or contact an admin.",
                 view=None,
             )
 
@@ -304,9 +305,10 @@ class SubtaskActionView(discord.ui.View):
                 view=None,
             )
         except Exception as e:
+            logger.error("Failed deleting sub-task #%s: %s", self.subtask_id, e, exc_info=True)
             await self._safe_edit_message(
                 interaction,
-                content=f"❌ Error deleting sub-task: {str(e)}", view=None
+                content="❌ Something went wrong. Please try again or contact an admin.", view=None
             )
 
 
@@ -388,8 +390,9 @@ class DeleteTaskButton(discord.ui.Button):
                 view=None,
             )
         except Exception as e:
+            logger.error("Failed deleting task %s: %s", self.view.task_uuid, e, exc_info=True)
             await interaction.edit_original_response(
-                content=f"❌ Error deleting task: {str(e)}",
+                content="❌ Something went wrong. Please try again or contact an admin.",
                 view=None,
             )
 

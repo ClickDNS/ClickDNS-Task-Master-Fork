@@ -1,9 +1,18 @@
 # Discord Bot
 discord_bot/.env
+discord_bot/.env.*
 discord_bot/data/
 discord_bot/*.log
 discord_bot/__pycache__/
 discord_bot/*/__pycache__/
+
+# Secrets (root/web)
+.env
+.env.*
+!.env.example
+web_app/.env
+web_app/.env.*
+credentials.json
 
 # Python
 __pycache__/

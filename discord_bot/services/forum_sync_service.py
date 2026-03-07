@@ -146,7 +146,7 @@ class ForumSyncService:
         from services.task_service import TaskService
         from discord_ui.buttons import TaskView
         task_service = TaskService()
-        tasks = task_service.get_all_tasks()
+        tasks = await task_service.get_all_tasks()
         tasks = sorted(tasks, key=self._task_sort_key)
 
         # Build a lookup of all active forum threads keyed by thread id for fast access.
@@ -376,7 +376,14 @@ class ForumSyncService:
             if not orphan_thread:
                 try:
                     orphan_thread = await self._bot.fetch_channel(int(mapped_thread_id))
-                except Exception:
+                except discord.NotFound:
+                    logger.warning(f"Orphan cleanup: channel {mapped_thread_id} not found")
+                    orphan_thread = None
+                except discord.Forbidden:
+                    logger.error(f"Orphan cleanup: missing permissions for channel {mapped_thread_id}")
+                    orphan_thread = None
+                except Exception as e:
+                    logger.error(f"Orphan cleanup: unexpected error fetching channel {mapped_thread_id}: {e}", exc_info=True)
                     orphan_thread = None
 
             removed = False

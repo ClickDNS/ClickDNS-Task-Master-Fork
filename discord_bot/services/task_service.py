@@ -2,6 +2,7 @@
 Task service layer for business logic
 """
 import logging
+import asyncio
 from typing import List, Optional
 from database.firebase_manager import DatabaseManager
 from database.task_model import Task, normalize_subtasks
@@ -17,9 +18,13 @@ class TaskService:
         self.db = DatabaseManager(use_firebase=not Settings.USE_LOCAL_STORAGE)
         self.username = Settings.TASKMASTER_USERNAME
 
-    def get_all_tasks(self, owner: str = None) -> List[Task]:
+    def _load_tasks_sync(self) -> List[Task]:
+        """Blocking task fetch."""
+        return self.db.load_tasks(self.username)
+
+    async def get_all_tasks(self, owner: str = None) -> List[Task]:
         """Get all tasks (optionally filtered by owner)"""
-        tasks = self.db.load_tasks(self.username)
+        tasks = await asyncio.to_thread(self._load_tasks_sync)
         if owner:
             tasks = [t for t in tasks if t.owner == owner]
         return tasks

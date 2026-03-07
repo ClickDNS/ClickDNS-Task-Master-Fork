@@ -312,6 +312,14 @@ async def help_command(interaction: discord.Interaction):
 @bot.tree.command(name="refresh", description="Manually refresh forum threads and dashboard")
 async def refresh_taskboard(interaction: discord.Interaction):
     """Command to manually refresh forum threads/dashboard"""
+    member = interaction.user if isinstance(interaction.user, discord.Member) else None
+    if not member or (not member.guild_permissions.manage_guild and interaction.guild and member.id != interaction.guild.owner_id):
+        await interaction.response.send_message(
+            "❌ You don't have permission to use this command.",
+            ephemeral=True,
+        )
+        return
+
     await interaction.response.defer(ephemeral=True)
     await forum_sync_service.sync_from_database()
     await dashboard_service.update_dashboard()
@@ -326,8 +334,8 @@ async def refresh_taskboard(interaction: discord.Interaction):
             try:
                 if msg is not None:
                     await msg.delete()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to auto-delete refresh confirmation: {e}")
         asyncio.create_task(_delete_later())
 
 

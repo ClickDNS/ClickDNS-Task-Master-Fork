@@ -18,6 +18,7 @@
         {% endif %}
         
         <form method="POST" action="{{ url_for('login') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="form-group">
                 <label for="username">Username</label>
                 <div class="input-icon-wrapper">
@@ -26,13 +27,21 @@
                            placeholder="Enter your username" required autofocus>
                 </div>
             </div>
+            <div class="form-group">
+                <label for="password">Password</label>
+                <div class="input-icon-wrapper">
+                    <i class="fa-solid fa-lock"></i>
+                    <input type="password" id="password" name="password" class="form-control"
+                           placeholder="Enter your password" required>
+                </div>
+            </div>
             
             <button type="submit" class="btn btn-primary btn-block">
                 <i class="fa-solid fa-right-to-bracket"></i> Sign In
             </button>
         </form>
         
-        <p class="help-text">Enter any username to continue. Your tasks will be saved to your account.</p>
+        <p class="help-text">Enter your username and app password to continue.</p>
     </div>
 </div>
 {% endblock %}

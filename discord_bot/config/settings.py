@@ -19,7 +19,7 @@ class Settings:
     DISCORD_BOT_TOKEN: str = os.getenv("DISCORD_BOT_TOKEN", "")
     DASHBOARD_CHANNEL: Optional[int] = None
     TASK_FORUM_CHANNEL: Optional[int] = None
-    REMINDER_CHANNEL: int = None
+    REMINDER_CHANNEL: Optional[int] = None
     LOG_CHANNEL: Optional[int] = None
 
     # Task-Master settings
@@ -119,7 +119,7 @@ class Settings:
 
         # Validate required settings
         if not cls.DISCORD_BOT_TOKEN:
-            raise ValueError("DISCORD_BOT_TOKEN is required")
+            raise RuntimeError("DISCORD_BOT_TOKEN is required — set it in discord_bot/.env")
 
         if not cls.TASKMASTER_USERNAME:
             logger.warning(

@@ -1,6 +1,6 @@
 from utils.validators import parse_deadline, format_deadline_for_display
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass, field
 """
@@ -123,7 +123,12 @@ class Task:
         """Parse deadline string to datetime object"""
         if not self.deadline:
             return None
-        return parse_deadline(self.deadline)
+        parsed = parse_deadline(self.deadline)
+        if parsed is None:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed
 
     @property
     def deadline_display(self) -> str:
@@ -135,7 +140,7 @@ class Task:
         """Check if task is overdue"""
         if not self.deadline_datetime:
             return False
-        return datetime.now() > self.deadline_datetime and self.status != "Complete"
+        return datetime.now(timezone.utc) > self.deadline_datetime.astimezone(timezone.utc) and self.status != "Complete"
 
     @property
     def priority_emoji(self) -> str:
