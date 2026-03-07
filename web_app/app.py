@@ -4,7 +4,7 @@ A Flask-based web version of the Task-Master application
 Compatible with CloudFlare Workers deployment
 """
 
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for, abort
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for, abort, g
 import logging
 import os
 import json
@@ -448,17 +448,30 @@ def _validate_task_payload(data):
     return None
 
 
+@app.before_request
+def generate_csp_nonce():
+    """Generate a unique nonce per request for inline script CSP allowlisting."""
+    g.csp_nonce = secrets.token_hex(16)
+
+
+@app.context_processor
+def inject_csp_nonce():
+    """Expose the CSP nonce to all Jinja templates as {{ csp_nonce }}."""
+    return {'csp_nonce': getattr(g, 'csp_nonce', '')}
+
+
 @app.after_request
 def set_security_headers(response):
+    nonce = getattr(g, 'csp_nonce', secrets.token_hex(16))
     response.headers['Content-Security-Policy'] = (
-        "default-src 'self'; "
-        "script-src 'self'; "
-        "style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data:; "
-        "connect-src 'self'; "
-        "frame-ancestors 'none'; "
-        "base-uri 'none'; "
-        "form-action 'self';"
+        f"default-src 'self'; "
+        f"script-src 'self' 'nonce-{nonce}'; "
+        f"style-src 'self' 'unsafe-inline'; "
+        f"img-src 'self' data:; "
+        f"connect-src 'self'; "
+        f"frame-ancestors 'none'; "
+        f"base-uri 'none'; "
+        f"form-action 'self';"
     )
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['X-Content-Type-Options'] = 'nosniff'

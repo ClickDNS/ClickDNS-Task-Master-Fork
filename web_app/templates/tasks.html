@@ -265,7 +265,7 @@
     <span class="toast-message"></span>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
     const colourOptions = {{ colour_options | tojson }};
 </script>
 {% endblock %}
