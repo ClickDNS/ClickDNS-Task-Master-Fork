@@ -1373,3 +1373,15 @@ input[type="checkbox"] {
         padding: 32px 24px;
     }
 }
+
+/* === CSP-safe utility classes (replace inline style= attributes) === */
+/* No !important — JS .style property assignments have higher specificity and still work */
+.tm-hidden {
+    display: none;
+}
+
+/* Loading spinner text inside modal description (hidden by default, shown via JS) */
+#modalDescriptionLoading {
+    display: none;
+    color: var(--text-secondary, #8B949E);
+}

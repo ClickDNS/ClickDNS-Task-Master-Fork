@@ -484,15 +484,29 @@ def inject_csp_nonce():
 def set_security_headers(response):
     nonce = getattr(g, 'csp_nonce', secrets.token_hex(16))
     response.headers['Content-Security-Policy'] = (
+        # Scripts: only self-hosted files + server-generated nonce for the one inline block
         f"default-src 'self'; "
         f"script-src 'self' 'nonce-{nonce}'; "
-        f"style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
-        f"font-src 'self' https://cdnjs.cloudflare.com; "
+        # Explicitly forbid inline event handlers (onclick= etc.) — we removed them all
+        f"script-src-attr 'none'; "
+        # style-src-elem: controls <link> and <style> elements — self-hosted FA only
+        f"style-src-elem 'self'; "
+        # style-src-attr: controls inline style= attributes — only needed for JS CSSOM
+        # assignments that go through setAttribute (none in this app), kept as 'none'
+        f"style-src-attr 'none'; "
+        # Fonts: self-hosted Font Awesome (no external CDN needed)
+        f"font-src 'self'; "
+        # Images: self-hosted favicons + data: for any CSS data-URI gradients
         f"img-src 'self' data:; "
+        # XHR/fetch: all API calls are same-origin (/api/tasks*)
         f"connect-src 'self'; "
+        # Hard blocks
+        f"object-src 'none'; "
         f"frame-ancestors 'none'; "
         f"base-uri 'none'; "
-        f"form-action 'self';"
+        f"form-action 'self'; "
+        # Force HTTPS for any accidental HTTP sub-resource loads
+        f"upgrade-insecure-requests;"
     )
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['X-Content-Type-Options'] = 'nosniff'

@@ -73,12 +73,12 @@
                             </label>
                         </div>
 
-                        <div class="form-group deadline-inputs" style="display: none;">
+                        <div class="form-group deadline-inputs tm-hidden">
                             <label for="deadlineDate">Date</label>
                             <input type="date" id="deadlineDate" class="form-control">
                         </div>
 
-                        <div class="form-group deadline-inputs" style="display: none;">
+                        <div class="form-group deadline-inputs tm-hidden">
                             <label for="deadlineTime">Time</label>
                             <input type="time" id="deadlineTime" class="form-control">
                         </div>
@@ -115,7 +115,7 @@
                         <button type="submit" class="btn btn-primary" id="submitTaskBtn">
                             <i class="fa-solid fa-plus"></i> Add Task
                         </button>
-                        <button type="button" id="cancelEdit" class="btn btn-ghost" style="display: none;">
+                        <button type="button" id="cancelEdit" class="btn btn-ghost tm-hidden">
                             <i class="fa-solid fa-xmark"></i> Cancel
                         </button>
                     </div>
@@ -182,18 +182,17 @@
 
             <div class="detail-section">
                 <span class="detail-label"><i class="fa-solid fa-align-left"></i> Description</span>
-                <div id="modalDescription" class="description-text"><span id="modalDescriptionLoading"
-                        style="display:none; color: var(--text-muted, #888);"><i
+                <div id="modalDescription" class="description-text"><span id="modalDescriptionLoading"><i
                             class="fa-solid fa-spinner fa-spin"></i> Loading…</span><span
                         id="modalDescriptionText"></span></div>
             </div>
 
-            <div class="detail-section" id="modalUrlSection" style="display:none;">
+            <div class="detail-section tm-hidden" id="modalUrlSection">
                 <span class="detail-label"><i class="fa-solid fa-link"></i> URL</span>
                 <a id="modalUrl" href="#" target="_blank" class="detail-link"></a>
             </div>
 
-            <div id="modalSubtasks" style="display: none;">
+            <div id="modalSubtasks" class="tm-hidden">
                 <span class="detail-label"><i class="fa-solid fa-list-check"></i> Sub-tasks</span>
             </div>
 

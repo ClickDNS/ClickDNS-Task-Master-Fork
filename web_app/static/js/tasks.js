@@ -473,7 +473,7 @@ function renderTasks() {
         return;
     }
 
-    // Sort by priority (highest first) then by order
+    // Sort by priority (highest first) then by order — must happen before innerHTML assignment
     filteredTasks.sort((a, b) => {
         const pa = PRIORITY_RANK[a.colour] || 0;
         const pb = PRIORITY_RANK[b.colour] || 0;
@@ -521,6 +521,12 @@ function renderTasks() {
 
     taskList.innerHTML = html;
 
+    // Apply progress bar widths via CSSOM (avoids style= attributes in HTML, which are
+    // blocked by style-src-attr 'none' CSP). data-progress carries the value; JS sets width.
+    taskList.querySelectorAll('.progress-bar-fill[data-progress]').forEach(el => {
+        el.style.width = el.dataset.progress + '%';
+    });
+
     // Setup drag and drop with event delegation
     setupDragAndDrop();
 
@@ -550,7 +556,7 @@ function createTaskElement(task) {
         progressHtml = `
             <div class="task-progress">
                 <div class="progress-bar-container">
-                    <div class="progress-bar-fill" style="width: ${percentage}%"></div>
+                    <div class="progress-bar-fill" data-progress="${percentage}"></div>
                 </div>
                 <span class="progress-text">${completed}/${total} (${percentage}%)</span>
             </div>
