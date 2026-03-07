@@ -252,6 +252,35 @@ function setupEventListeners() {
         }
     });
 
+    // Subtask form actions — event delegation on stable container (innerHTML replacement
+    // doesn't remove listeners on the container element itself)
+    document.getElementById('subtasksList').addEventListener('click', (e) => {
+        const el = e.target.closest('[data-action]');
+        if (!el) return;
+        const idx = parseInt(el.dataset.idx, 10);
+        if (el.dataset.action === 'toggle-form') toggleSubtaskInForm(idx);
+        else if (el.dataset.action === 'edit-form') editSubtaskInForm(idx);
+        else if (el.dataset.action === 'delete-form') deleteSubtaskFromForm(idx);
+    });
+
+    // Task action buttons — event delegation on taskList
+    taskList.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-action]');
+        if (!btn || !btn.closest('.task-actions')) return;
+        e.stopPropagation();
+        const { action, taskId } = btn.dataset;
+        if (action === 'complete') updateTaskStatus(taskId, 'Complete');
+        else if (action === 'progress') updateTaskStatus(taskId, 'In Progress');
+        else if (action === 'delete-task') deleteTask(taskId);
+    });
+
+    // Modal subtask toggle — event delegation on stable container
+    document.getElementById('modalSubtasks').addEventListener('click', (e) => {
+        const el = e.target.closest('[data-action="toggle-modal"]');
+        if (!el) return;
+        toggleModalSubtask(el.dataset.taskId, parseInt(el.dataset.subtaskId, 10));
+    });
+
     // Cancel edit button
     cancelEditBtn.addEventListener('click', () => {
         editingTaskId = null;
@@ -306,10 +335,10 @@ function renderSubtasksList() {
         html += `
             <li class="${st.completed ? 'subtask-done' : ''}">
                 <div class="subtask-row">
-                    <span class="subtask-checkbox" onclick="toggleSubtaskInForm(${idx})">${checkbox}</span>
+                    <span class="subtask-checkbox" data-action="toggle-form" data-idx="${idx}">${checkbox}</span>
                     <span class="subtask-name">#${st.id} ${escapeHtml(st.name)}</span>
-                    <button type="button" class="btn btn-sm btn-secondary" onclick="editSubtaskInForm(${idx})">Edit</button>
-                    <button type="button" class="btn-subtask-delete" onclick="deleteSubtaskFromForm(${idx})">✕</button>
+                    <button type="button" class="btn btn-sm btn-secondary" data-action="edit-form" data-idx="${idx}">Edit</button>
+                    <button type="button" class="btn-subtask-delete" data-action="delete-form" data-idx="${idx}">✕</button>
                 </div>
                 ${(descHtml || urlHtml) ? `<div class="subtask-form-extras">${descHtml}${urlHtml}</div>` : ''}
             </li>
@@ -540,13 +569,13 @@ function createTaskElement(task) {
                 </div>
             </div>
             <div class="task-actions">
-                <button class="task-action-btn action-complete" onclick="updateTaskStatus('${task.id}', 'Complete'); event.stopPropagation();" title="Mark Complete">
+                <button class="task-action-btn action-complete" data-action="complete" data-task-id="${task.id}" title="Mark Complete">
                     <i class="fa-solid fa-check"></i>
                 </button>
-                <button class="task-action-btn action-progress" onclick="updateTaskStatus('${task.id}', 'In Progress'); event.stopPropagation();" title="Set In Progress">
+                <button class="task-action-btn action-progress" data-action="progress" data-task-id="${task.id}" title="Set In Progress">
                     <i class="fa-solid fa-play"></i>
                 </button>
-                <button class="task-action-btn action-delete" onclick="deleteTask('${task.id}'); event.stopPropagation();" title="Delete">
+                <button class="task-action-btn action-delete" data-action="delete-task" data-task-id="${task.id}" title="Delete">
                     <i class="fa-solid fa-trash-can"></i>
                 </button>
             </div>
@@ -724,7 +753,7 @@ function renderSubtasksHtml(task) {
         html += `
             <li class="subtask-item ${st.completed ? 'completed' : ''}">
                 <div class="subtask-main">
-                    <span class="subtask-toggle" title="Toggle completion" onclick="toggleModalSubtask('${task.id}', ${subtaskId})">${checkbox}</span>
+                    <span class="subtask-toggle" title="Toggle completion" data-action="toggle-modal" data-task-id="${task.id}" data-subtask-id="${subtaskId}">${checkbox}</span>
                     #${subtaskId} ${escapeHtml(st.name)}
                 </div>
                 ${descriptionHtml}

@@ -466,7 +466,8 @@ def set_security_headers(response):
     response.headers['Content-Security-Policy'] = (
         f"default-src 'self'; "
         f"script-src 'self' 'nonce-{nonce}'; "
-        f"style-src 'self' 'unsafe-inline'; "
+        f"style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
+        f"font-src 'self' https://cdnjs.cloudflare.com; "
         f"img-src 'self' data:; "
         f"connect-src 'self'; "
         f"frame-ancestors 'none'; "
