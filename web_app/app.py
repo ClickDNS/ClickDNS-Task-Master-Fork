@@ -23,7 +23,8 @@ import requests as _requests
 from flask_wtf.csrf import CSRFProtect
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from flask_cors import CORS
+# flask_cors removed: 5.0.0 has a regex bug where '*' origin crashes re.match.
+# CORS is handled manually in set_security_headers / handle_cors_preflight below.
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Try to import firebase_admin (optional)
@@ -159,10 +160,9 @@ ALLOWED_HOSTS = [host.strip()
 _proxy_count = int(os.getenv('TRUSTED_PROXY_COUNT', '1'))
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=_proxy_count, x_proto=_proxy_count)
 
-# Optional CORS support for configured origins
+# Allowed CORS origins (used in manual CORS handlers below)
 _cors_origins = [o.strip() for o in os.getenv('CORS_ORIGINS', '').split(',') if o.strip()]
-if _cors_origins:
-    CORS(app, origins=_cors_origins, supports_credentials=True)
+_cors_wildcard = '*' in _cors_origins
 
 # CSRF and rate limiting
 csrf = CSRFProtect(app)
@@ -449,6 +449,26 @@ def _validate_task_payload(data):
 
 
 @app.before_request
+def handle_cors_preflight():
+    """Handle CORS preflight OPTIONS requests before any route logic runs."""
+    if request.method != 'OPTIONS':
+        return None
+    origin = request.headers.get('Origin', '')
+    if not origin or not _cors_origins:
+        return None
+    if not (_cors_wildcard or origin in _cors_origins):
+        return None
+    resp = app.make_default_options_response()
+    resp.headers['Access-Control-Allow-Origin'] = '*' if _cors_wildcard else origin
+    if not _cors_wildcard:
+        resp.headers['Access-Control-Allow-Credentials'] = 'true'
+    resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, PATCH, OPTIONS'
+    resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-CSRFToken'
+    resp.headers['Access-Control-Max-Age'] = '600'
+    return resp
+
+
+@app.before_request
 def generate_csp_nonce():
     """Generate a unique nonce per request for inline script CSP allowlisting."""
     g.csp_nonce = secrets.token_hex(16)
@@ -480,6 +500,18 @@ def set_security_headers(response):
     response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
     if request.is_secure or request.headers.get('X-Forwarded-Proto') == 'https':
         response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+
+    # Manual CORS — avoids flask-cors 5.0.0 regex crash on '*' origin pattern
+    if _cors_origins:
+        origin = request.headers.get('Origin', '')
+        if origin and (_cors_wildcard or origin in _cors_origins):
+            response.headers['Access-Control-Allow-Origin'] = '*' if _cors_wildcard else origin
+            if not _cors_wildcard:
+                response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, PATCH, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-CSRFToken'
+            response.headers['Vary'] = 'Origin'
+
     return response
 
 
